@@ -5,6 +5,7 @@ import logging
 import time
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import BotCommand, ErrorEvent
 
 from app import runtime, texts
@@ -41,6 +42,16 @@ def build_dispatcher() -> Dispatcher:
 
     @dp.errors()
     async def on_error(event: ErrorEvent, bot: Bot) -> None:
+        # людина заблокувала бота — це нормальний стан життя, а не аварія
+        if isinstance(event.exception, TelegramForbiddenError):
+            log.warning("Користувач недоступний: %s", event.exception)
+            return
+        # повторний тап по тій самій кнопці не змінює текст — теж не аварія
+        if isinstance(event.exception, TelegramBadRequest) and (
+            "message is not modified" in str(event.exception)
+        ):
+            return
+
         log.exception("Помилка обробки апдейта: %s", event.exception)
         message = None
         if event.update.message:

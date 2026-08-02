@@ -14,6 +14,10 @@ cp .env.example .env
 nano .env            # BOT_TOKEN, ADMIN_ID, (опційно) HEALTHCHECK_URL
 chmod 600 .env
 
+# контейнер працює під непривілейованим uid 1000, тож директорія з базою
+# має належати йому — інакше SQLite не відкриє файл
+mkdir -p data && chown -R 1000:1000 data
+
 docker compose up -d --build
 docker compose logs -f --tail 50   # має зʼявитись «Стартую як @…»
 ```

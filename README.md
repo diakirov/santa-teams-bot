@@ -56,7 +56,8 @@ pytest
 ## Запуск у Docker
 
 ```bash
-cp .env.example .env   # вписати BOT_TOKEN і ADMIN_ID
+cp .env.example .env            # вписати BOT_TOKEN і ADMIN_ID
+mkdir -p data && chown -R 1000:1000 data   # контейнер працює під uid 1000
 docker compose up -d --build
 ```
 
