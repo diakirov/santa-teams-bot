@@ -1,0 +1,29 @@
+# Секрети
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Дані та бекапи
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Персональні дані (спадок старих версій, про всяк випадок)
+*.xlsx
+!*.example.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

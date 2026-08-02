@@ -1,0 +1,19 @@
+# Окремий compose-стек. Не додавати ці сервіси в інші compose-файли:
+# ізоляція тримається на окремому проєкті (= назві директорії).
+services:
+  santabot:
+    build: .
+    container_name: santabot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /app/data/santa.db
+    volumes:
+      - ./data:/app/data
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
