@@ -495,7 +495,8 @@ async def report_create(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     await state.clear()
     report_id = await repo.create_report(
-        message.from_user.id, data["reported_id"], data["team_id"], reason
+        message.from_user.id, data["reported_id"], data["team_id"], reason,
+        author_msg_id=message.message_id,
     )
     await message.answer(texts.REPORT_SENT)
     reported = await repo.get_user(data["reported_id"])
@@ -507,7 +508,9 @@ async def report_create(message: Message, state: FSMContext, bot: Bot) -> None:
         f"На: {username} (id {data['reported_id']})\n"
         f"Від: @{message.from_user.username or message.from_user.id}\n"
         f"Причина: {reason}",
-        reply_markup=kb.report_actions_kb(report_id, "user", "open"),
+        reply_markup=kb.report_actions_kb(
+            report_id, "user", "open", bool(message.from_user.username)
+        ),
     )
 
 

@@ -12,9 +12,11 @@ from app import keyboards as kb
 from app import texts
 from app.config import ADMIN_ID
 from app.db import repo
+from aiogram.types import ReplyParameters
+
 from app.routers.joining import join_team_by_code
 from app.services import invites, limits, validators
-from app.states import EnterCode, FeedbackText, FormFill
+from app.states import EnterCode, FeedbackText, FormFill, UserReply
 
 log = logging.getLogger(__name__)
 router = Router(name="start")
@@ -93,7 +95,8 @@ async def feedback_create(message: Message, state: FSMContext, bot: Bot) -> None
     kind = data.get("kind", "bug")
     # фідбек — «скарга на бота»: reported_user_id = сам автор, команда не потрібна
     report_id = await repo.create_report(
-        message.from_user.id, message.from_user.id, None, text, report_type=kind
+        message.from_user.id, message.from_user.id, None, text,
+        report_type=kind, author_msg_id=message.message_id,
     )
     await message.answer(texts.FEEDBACK_SENT)
     label = "🐞 Баг-репорт" if kind == "bug" else "💡 Пропозиція"
@@ -103,8 +106,74 @@ async def feedback_create(message: Message, state: FSMContext, bot: Bot) -> None
         f"{label} #{report_id}\n"
         f"Від: @{message.from_user.username or message.from_user.id} "
         f"(id {message.from_user.id})\n\n{text}",
-        reply_markup=kb.report_actions_kb(report_id, kind, "open"),
+        reply_markup=kb.report_actions_kb(
+            report_id, kind, "open", bool(message.from_user.username)
+        ),
     )
+
+
+@router.callback_query(kb.UserReplyCb.filter())
+async def author_reply_ask(
+    cb: CallbackQuery, callback_data: kb.UserReplyCb, state: FSMContext
+) -> None:
+    report = await repo.get_report(callback_data.report_id)
+    if report is None or report["reporter_id"] != cb.from_user.id:
+        await cb.answer("Це не твоє звернення 🤔", show_alert=True)
+        return
+    if report["status"] not in ("open", "in_progress"):
+        await cb.answer(texts.AUTHOR_REPLY_CLOSED, show_alert=True)
+        return
+    await state.set_state(UserReply.text)
+    await state.update_data(report_id=report["id"])
+    await cb.message.answer(texts.AUTHOR_REPLY_ASK)
+    await cb.answer()
+
+
+@router.message(UserReply.text, F.text)
+async def author_reply_send(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = (message.text or "").strip()
+    if text.startswith("/") or text in kb.MENU_BUTTONS:
+        await state.clear()
+        raise SkipHandler
+    if len(text) > validators.MAX_FEEDBACK:
+        await message.answer(texts.form_too_long(validators.MAX_FEEDBACK))
+        return
+    data = await state.get_data()
+    await state.clear()
+    report = await repo.get_report(data.get("report_id", 0))
+    if report is None or report["reporter_id"] != message.from_user.id:
+        await message.answer(texts.ERROR)
+        return
+    if report["status"] not in ("open", "in_progress"):
+        await message.answer(texts.AUTHOR_REPLY_CLOSED)
+        return
+    admin_id = report["last_admin_id"] or report["taken_by"]
+    if not admin_id:
+        await message.answer(texts.ERROR)
+        return
+    author = message.from_user
+    who = f"@{author.username} (id {author.id})" if author.username else f"id {author.id}"
+    # цитата питання адміна — щоб було видно, на що це відповідь
+    reply_params = (
+        ReplyParameters(
+            message_id=report["admin_msg_id"], allow_sending_without_reply=True
+        )
+        if report["admin_msg_id"]
+        else None
+    )
+    try:
+        await bot.send_message(
+            admin_id,
+            f"↩️ Автор звернення #{report['id']} ({who}) відповідає:\n\n{text}",
+            reply_parameters=reply_params,
+            reply_markup=kb.admin_continue_kb(report["id"], bool(author.username)),
+        )
+    except Exception:
+        await message.answer(texts.ERROR)
+        return
+    await repo.set_report_author_msg(report["id"], message.message_id)
+    log.info("Відповідь автора звернення #%s адміну %s", report["id"], admin_id)
+    await message.answer(texts.AUTHOR_REPLY_SENT)
 
 
 @router.message(Command("cancel"))

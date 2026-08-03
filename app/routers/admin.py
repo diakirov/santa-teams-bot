@@ -7,7 +7,13 @@ from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    Message,
+    MessageEntity,
+    ReplyParameters,
+    User,
+)
 
 from app import keyboards as kb
 from app import texts
@@ -152,7 +158,9 @@ async def _list_reports(cb: CallbackQuery, bucket: str, kind_key: str) -> None:
         await cb.answer("Тут порожньо 👌", show_alert=True)
         return
     for r in reports:
-        markup = kb.report_actions_kb(r["id"], r["type"], r["status"])
+        markup = kb.report_actions_kb(
+            r["id"], r["type"], r["status"], bool(r["reporter_username"])
+        )
         await cb.message.answer(_report_text(r), reply_markup=markup)
     await cb.message.answer("Показати:", reply_markup=kb.reports_filter_kb(bucket, kind_key))
     await cb.answer()
@@ -189,7 +197,9 @@ async def admin_report_take(cb: CallbackQuery, callback_data: kb.AdminCb, bot: B
     report = await repo.get_report(report["id"])
     await cb.message.edit_text(
         _report_text(report),
-        reply_markup=kb.report_actions_kb(report["id"], report["type"], "in_progress"),
+        reply_markup=kb.report_actions_kb(
+            report["id"], report["type"], "in_progress", bool(report["reporter_username"])
+        ),
     )
     what = "Скаргу" if report["type"] == "user" else "Фідбек"
     await notify_admins(
@@ -239,16 +249,55 @@ async def admin_report_reply_send(message: Message, state: FSMContext, bot: Bot)
         "bug": f"на твій баг-репорт #{report['id']}",
         "idea": f"на твою пропозицію #{report['id']}",
     }[report["type"]]
+    # цитата звернення автора — щоб було видно, до чого стосується відповідь
+    reply_params = (
+        ReplyParameters(
+            message_id=report["author_msg_id"], allow_sending_without_reply=True
+        )
+        if report["author_msg_id"]
+        else None
+    )
     try:
         await bot.send_message(
             report["reporter_id"],
             f"✉️ Відповідь адміна {subject}:\n\n{text}",
+            reply_parameters=reply_params,
+            reply_markup=kb.author_reply_kb(report["id"]),
         )
     except Exception:
         await message.answer("Не зміг доставити — людина, схоже, заблокувала бота 😕")
         return
+    # запамʼятовуємо питання: відповідь автора полетить саме цьому адміну з цитатою
+    await repo.set_report_admin_msg(report["id"], message.from_user.id, message.message_id)
     log.info("Відповідь на звернення #%s від адміна %s", report["id"], message.from_user.id)
     await message.answer("Надіслано ✅ Не забудь закрити, коли питання вичерпане.")
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "rep_profile"))
+async def admin_report_profile(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    """Клікабельний лінк на профіль автора за id — коли немає @username."""
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    report = await repo.get_report(callback_data.arg)
+    if report is None:
+        await cb.answer("Не знайдено", show_alert=True)
+        return
+    label = "Профіль автора"
+    # text_mention — явна ентіті без parse_mode, тексти лишаються plain
+    entity = MessageEntity(
+        type="text_mention",
+        offset=0,
+        length=len(label),
+        user=User(id=report["reporter_id"], is_bot=False, first_name="Автор"),
+    )
+    await cb.message.answer(
+        f"{label} звернення #{report['id']} (id {report['reporter_id']}).\n"
+        "Якщо профіль не відкрився (буває через приватність) — "
+        "користуйся «✉️ Написати автору», це працює завжди.",
+        entities=[entity],
+    )
+    await cb.answer()
 
 
 @router.callback_query(kb.AdminCb.filter(F.act.in_({"rep_ban", "rep_dismiss"})))

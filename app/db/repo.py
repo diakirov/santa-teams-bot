@@ -556,14 +556,31 @@ async def create_report(
     team_id: int | None,
     reason: str,
     report_type: str = "user",
+    author_msg_id: int | None = None,
 ) -> int:
     cur = await db().execute(
-        "INSERT INTO reports (reporter_id, reported_user_id, team_id, type, reason, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (reporter_id, reported_user_id, team_id, report_type, reason, now()),
+        "INSERT INTO reports (reporter_id, reported_user_id, team_id, type, reason, "
+        "author_msg_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (reporter_id, reported_user_id, team_id, report_type, reason, author_msg_id, now()),
     )
     await db().commit()
     return cur.lastrowid
+
+
+async def set_report_author_msg(report_id: int, msg_id: int) -> None:
+    await db().execute(
+        "UPDATE reports SET author_msg_id=? WHERE id=?", (msg_id, report_id)
+    )
+    await db().commit()
+
+
+async def set_report_admin_msg(report_id: int, admin_id: int, msg_id: int) -> None:
+    """Останній адмін у діалозі — саме йому полетить відповідь автора."""
+    await db().execute(
+        "UPDATE reports SET last_admin_id=?, admin_msg_id=? WHERE id=?",
+        (admin_id, msg_id, report_id),
+    )
+    await db().commit()
 
 
 async def reports_list(bucket: str, kind: str | None = None, limit: int = 10) -> list[Row]:

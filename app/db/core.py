@@ -50,6 +50,14 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
             "ALTER TABLE reports ADD COLUMN type TEXT NOT NULL DEFAULT 'user'"
         )
         log.info("Міграція: додано reports.type")
+    for column, ddl in (
+        ("author_msg_id", "ALTER TABLE reports ADD COLUMN author_msg_id INTEGER"),
+        ("admin_msg_id", "ALTER TABLE reports ADD COLUMN admin_msg_id INTEGER"),
+        ("last_admin_id", "ALTER TABLE reports ADD COLUMN last_admin_id INTEGER"),
+    ):
+        if column not in report_columns:
+            await conn.execute(ddl)
+            log.info("Міграція: додано reports.%s", column)
     # нові статуси в CHECK: SQLite не вміє ALTER CHECK — перебудовуємо таблицю
     cur = await conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='reports'"

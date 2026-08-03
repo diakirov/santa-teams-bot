@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS reports (
                      CHECK (status IN ('open', 'in_progress', 'banned', 'dismissed', 'closed')),
     taken_by         INTEGER,                                -- який адмін узяв у роботу
     taken_at         TEXT,
+    -- міні-діалог автор ↔ адмін через бота: реплаї й адресація відповіді
+    author_msg_id    INTEGER,                                -- останнє повідомлення автора (для цитати йому)
+    admin_msg_id     INTEGER,                                -- останнє повідомлення адміна (для цитати адміну)
+    last_admin_id    INTEGER,                                -- кому з адмінів летить відповідь автора
     created_at       TEXT NOT NULL,
     resolved_at      TEXT
 );

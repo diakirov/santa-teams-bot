@@ -63,6 +63,11 @@ class FeedbackCb(CallbackData, prefix="fb"):
     kind: str  # bug | idea
 
 
+class UserReplyCb(CallbackData, prefix="ur"):
+    """Відповідь автора звернення адміну через бота."""
+    report_id: int
+
+
 class RepListCb(CallbackData, prefix="rl"):
     """Фільтри черги скарг/фідбеку."""
     bucket: str  # open | work | done
@@ -271,14 +276,19 @@ def feedback_type_kb() -> InlineKeyboardMarkup:
     )
 
 
-def report_actions_kb(report_id: int, rtype: str, status: str) -> InlineKeyboardMarkup | None:
+def report_actions_kb(
+    report_id: int, rtype: str, status: str, reporter_has_username: bool = True
+) -> InlineKeyboardMarkup | None:
     """Дії з карткою скарги/фідбеку залежно від типу і статусу. None — без кнопок."""
     rows = []
     if status == "open":
         rows.append([_btn("🛠 Взяти в роботу", AdminCb(act="rep_take", arg=report_id))])
     if status in ("open", "in_progress"):
-        # відповідь через бота працює навіть без @username — автор точно запускав бота
+        # переписка через бота працює навіть без @username — автор точно запускав бота
         rows.append([_btn("✉️ Написати автору", AdminCb(act="rep_reply", arg=report_id))])
+        if not reporter_has_username:
+            # без @username лічку не відкрити з тексту — даємо лінк на профіль за id
+            rows.append([_btn("👤 Профіль автора", AdminCb(act="rep_profile", arg=report_id))])
         if rtype == "user":
             # довгі підписи — кожен своїм рядком, інакше Telegram обрізає текст
             rows.append([_btn("🚫 Забанити глобально", AdminCb(act="rep_ban", arg=report_id))])
@@ -286,6 +296,20 @@ def report_actions_kb(report_id: int, rtype: str, status: str) -> InlineKeyboard
         else:
             rows.append([_btn("✔️ Закрити", AdminCb(act="rep_dismiss", arg=report_id))])
     return _kb(*rows) if rows else None
+
+
+def author_reply_kb(report_id: int) -> InlineKeyboardMarkup:
+    """Під повідомленням адміна автору: відповісти тому ж адміну через бота."""
+    return _kb([_btn("↩️ Відповісти адміну", UserReplyCb(report_id=report_id))])
+
+
+def admin_continue_kb(report_id: int, reporter_has_username: bool) -> InlineKeyboardMarkup:
+    """Під відповіддю автора адміну: продовжити діалог, не шукаючи картку."""
+    rows = [[_btn("✉️ Відповісти", AdminCb(act="rep_reply", arg=report_id))]]
+    if not reporter_has_username:
+        rows.append([_btn("👤 Профіль автора", AdminCb(act="rep_profile", arg=report_id))])
+    rows.append([_btn("✔️ Закрити звернення", AdminCb(act="rep_dismiss", arg=report_id))])
+    return _kb(*rows)
 
 
 def reports_filter_kb(bucket: str, kind: str) -> InlineKeyboardMarkup:

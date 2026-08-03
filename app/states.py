@@ -39,5 +39,10 @@ class FeedbackText(StatesGroup):
 
 
 class AdminReply(StatesGroup):
-    """Відповідь адміна автору фідбеку."""
+    """Відповідь адміна автору звернення."""
+    text = State()
+
+
+class UserReply(StatesGroup):
+    """Відповідь автора звернення адміну."""
     text = State()
