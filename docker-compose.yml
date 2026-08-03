@@ -11,7 +11,8 @@ services:
     volumes:
       - ./data:/app/data
     mem_limit: 256m
-    cpus: 0.5
+    # 0.4 ядра = 20% 2-vCPU сервера; у спокої бот їсть 0%, ліміт відчутний лише на старті
+    cpus: 0.4
     logging:
       driver: json-file
       options:

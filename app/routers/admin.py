@@ -14,7 +14,7 @@ from app import texts
 from app.config import ADMIN_ID, DB_PATH
 from app.db import repo
 from app import runtime
-from app.services import validators
+from app.services import resources, validators
 from app.states import BanReason
 
 log = logging.getLogger(__name__)
@@ -739,7 +739,7 @@ async def cmd_health(message: Message) -> None:
         db_size = os.path.getsize(DB_PATH) / 1024 / 1024
     except OSError:
         db_size = 0
-    await message.answer(
+    text = (
         "🩺 Стан бота\n\n"
         f"Аптайм: {runtime.uptime_hours():.1f} год\n"
         f"БД: {db_size:.1f} МБ\n"
@@ -747,3 +747,7 @@ async def cmd_health(message: Message) -> None:
         f"Недоставлених пар: {s['undelivered']}\n"
         f"Скарг у черзі: {s['open_reports']}, заявок на ролі: {s['pending_roles']}"
     )
+    # блок ресурсів із порогами — лише головному адміну
+    if message.from_user.id == ADMIN_ID:
+        text += "\n\n" + resources.health_block(DB_PATH)
+    await message.answer(text)

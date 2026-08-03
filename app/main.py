@@ -13,7 +13,12 @@ from app.config import ADMIN_ID, BOT_TOKEN, DB_PATH, LOG_LEVEL
 from app.db import core, repo
 from app.db.fsm_storage import SQLiteStorage
 from app.routers import routers
-from app.services.monitor import daily_task, healthcheck_task, heartbeat_task
+from app.services.monitor import (
+    daily_task,
+    healthcheck_task,
+    heartbeat_task,
+    resources_task,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +102,7 @@ async def main() -> None:
         asyncio.create_task(heartbeat_task()),
         asyncio.create_task(healthcheck_task(bot)),
         asyncio.create_task(daily_task()),
+        asyncio.create_task(resources_task(bot)),
     ]
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query", "my_chat_member"])
