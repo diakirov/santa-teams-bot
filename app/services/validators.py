@@ -13,6 +13,7 @@ MAX_REPORT_REASON = 500
 MIN_BAN_REASON = 10
 MAX_BAN_REASON = 500
 MAX_FEEDBACK = 1000
+MAX_BATCH_ADD = 50  # скільки людей можна додати одним повідомленням
 
 _URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _BAD_SCHEME_RE = re.compile(r"\b(?!https?:)[a-z][a-z0-9+.-]{1,20}://", re.IGNORECASE)
@@ -51,6 +52,25 @@ def ban_reason(raw: str) -> str | None:
     if len(set(reason.replace(" ", ""))) < 3:
         return None
     return reason
+
+
+def parse_member_tokens(text: str) -> list[str]:
+    """Список @username / числових id: через кому, крапку з комою, пробіли чи рядки.
+
+    Дублікати (без регістру) прибираються, порядок зберігається.
+    """
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"[,;\s]+", text):
+        token = raw.strip().lstrip("@")
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        tokens.append(token)
+    return tokens
 
 
 def format_short_name(full_name: str) -> str:

@@ -4,6 +4,7 @@ from app.services.validators import (
     has_forbidden_scheme,
     has_url,
     normalize_phone,
+    parse_member_tokens,
 )
 
 
@@ -47,6 +48,22 @@ def test_ban_reason_normalizes_whitespace():
     assert ban_reason("  спам   у\n чаті  ") == "спам у чаті"
     # пробілами до 10 символів не дотягнути
     assert ban_reason("аб   вг    д") is None
+
+
+def test_parse_member_tokens_formats():
+    assert parse_member_tokens("@vasya") == ["vasya"]
+    assert parse_member_tokens("vasya, @petya;  123456") == ["vasya", "petya", "123456"]
+    assert parse_member_tokens("@a\n@b\n@c") == ["a", "b", "c"]
+    assert parse_member_tokens("@a @b @c") == ["a", "b", "c"]
+
+
+def test_parse_member_tokens_dedupes_case_insensitive():
+    assert parse_member_tokens("@Vasya, vasya, @VASYA") == ["Vasya"]
+
+
+def test_parse_member_tokens_empty():
+    assert parse_member_tokens("") == []
+    assert parse_member_tokens(" , ;\n ") == []
 
 
 def test_urls():

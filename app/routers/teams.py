@@ -272,6 +272,7 @@ async def member_add_ask(cb: CallbackQuery, callback_data: kb.TeamCb, state: FSM
 
 @router.message(AddMember.username, F.text)
 async def member_add(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Додавання одного або одразу списку: @username чи id через кому/рядки."""
     text = (message.text or "").strip()
     if text.startswith("/") or text in kb.MENU_BUTTONS:
         await state.clear()
@@ -282,29 +283,75 @@ async def member_add(message: Message, state: FSMContext, bot: Bot) -> None:
         await state.clear()
         await message.answer(texts.ERROR)
         return
-    user = await repo.find_user_by_username(text)
-    if user is None:
-        await message.answer(texts.MEMBER_NOT_FOUND)
+    tokens = validators.parse_member_tokens(text)
+    if not tokens:
+        await message.answer(texts.MEMBER_ASK_WHO_ADD)
         return
-    member = await repo.get_member(team["id"], user["id"])
-    if member is not None and not member["is_blocked"]:
-        await state.clear()
-        await message.answer(texts.ALREADY_MEMBER)
-        return
-    from app.routers.joining import _capacity
-    if await repo.member_count(team["id"]) >= await _capacity(team):
-        await state.clear()
-        await message.answer(texts.TEAM_FULL)
-        return
-    await repo.add_member(team["id"], user["id"], added_by=message.from_user.id)
-    await state.clear()
-    await message.answer(texts.MEMBER_ADDED)
-    try:
-        await bot.send_message(user["id"], texts.joined_team(team["name"]))
-    except Exception:
+    if len(tokens) > validators.MAX_BATCH_ADD:
         await message.answer(
-            "Але попередити людину я не зміг (бот у неї не запущений) — скажи їй сам 🙂"
+            f"Забагато за один раз: {len(tokens)}. "
+            f"Ліміт — {validators.MAX_BATCH_ADD}, надішли список частинами 🙂"
         )
+        return
+
+    from app.routers.joining import _capacity
+    capacity = await _capacity(team)
+    count = await repo.member_count(team["id"])
+    added: list[str] = []
+    existing: list[str] = []
+    not_found: list[str] = []
+    dm_failed: list[str] = []
+    left_out: list[str] = []
+
+    for token in tokens:
+        label = f"id {token}" if token.isdigit() else f"@{token}"
+        user = (
+            await repo.get_user(int(token))
+            if token.isdigit()
+            else await repo.find_user_by_username(token)
+        )
+        if user is None:
+            not_found.append(label)
+            continue
+        member = await repo.get_member(team["id"], user["id"])
+        if member is not None and not member["is_blocked"]:
+            existing.append(label)
+            continue
+        if count >= capacity:
+            left_out.append(label)
+            continue
+        await repo.add_member(team["id"], user["id"], added_by=message.from_user.id)
+        count += 1
+        added.append(label)
+        try:
+            await bot.send_message(user["id"], texts.joined_team(team["name"]))
+        except Exception:
+            dm_failed.append(label)
+
+    await state.clear()
+    lines: list[str] = []
+    if added:
+        lines.append(f"✅ Додано ({len(added)}): {', '.join(added)}")
+    if dm_failed:
+        lines.append(
+            f"…але попередити не зміг (бот не запущений?): {', '.join(dm_failed)} — "
+            "скажи їм сам 🙂"
+        )
+    if existing:
+        lines.append(f"🙂 Вже в команді ({len(existing)}): {', '.join(existing)}")
+    if left_out:
+        lines.append(
+            f"⚠️ Не влізли в ліміт учасників ({capacity}): {', '.join(left_out)}. "
+            "Адміністратор може збільшити ліміт."
+        )
+    if not_found:
+        link = await build_invite_link(bot, team["invite_code"])
+        lines.append(
+            f"🤔 Не знайшов ({len(not_found)}): {', '.join(not_found)}\n"
+            "Ці люди ще не запускали бота, тому я не можу написати їм першим. "
+            f"Просто перешли їм запрошення:\n{link}"
+        )
+    await message.answer("\n\n".join(lines))
 
 
 # --- видалити / заблокувати
