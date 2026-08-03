@@ -307,6 +307,7 @@ async def cmd_make_admin(message: Message, command: CommandObject, bot: Bot) -> 
         await message.answer("Ця людина вже адміністратор 🙂")
         return
     await repo.set_role(user["id"], "admin")
+    runtime.throttling_middleware.add_admin(user["id"])
     log.info("Користувача %s призначено адміністратором", user["id"])
     await message.answer(f"Готово ✅ id {user['id']} тепер адміністратор.")
     try:
@@ -332,6 +333,7 @@ async def cmd_remove_admin(message: Message, command: CommandObject) -> None:
         await message.answer("Ця людина й так не адміністратор.")
         return
     await repo.set_role(user["id"], "user")
+    runtime.throttling_middleware.discard_admin(user["id"])
     log.info("Користувача %s знято з адміністраторів", user["id"])
     await message.answer(
         f"Готово ✅ id {user['id']} більше не адміністратор (роль — звичайний користувач; "

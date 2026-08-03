@@ -10,7 +10,7 @@ from aiogram.types import BotCommand, ErrorEvent
 
 from app import runtime, texts
 from app.config import ADMIN_ID, BOT_TOKEN, DB_PATH, LOG_LEVEL
-from app.db import core
+from app.db import core, repo
 from app.db.fsm_storage import SQLiteStorage
 from app.routers import routers
 from app.services.monitor import daily_task, healthcheck_task, heartbeat_task
@@ -84,6 +84,7 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     await core.connect(DB_PATH)
+    runtime.throttling_middleware.set_admins(await repo.admin_ids(ADMIN_ID), ADMIN_ID)
 
     bot = Bot(token=BOT_TOKEN)  # parse_mode за замовчуванням вимкнений — дані юзерів завжди plain text
     dp = build_dispatcher()
