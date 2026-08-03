@@ -199,9 +199,41 @@ def admin_menu_kb(registration_open: bool) -> InlineKeyboardMarkup:
         [_btn("📊 Статистика", AdminCb(act="stats"))],
         [_btn("⚠️ Скарги", AdminCb(act="reports"))],
         [_btn("👑 Запити ролей", AdminCb(act="roles"))],
+        [_btn("👥 Люди з ролями", AdminCb(act="people"))],
         [_btn("⚙️ Ліміти", AdminCb(act="limits"))],
         [_btn(toggle, AdminCb(act="toggle_reg"))],
     )
+
+
+def people_list_kb(admins, kerivnyky) -> InlineKeyboardMarkup:
+    def label(u, badge):
+        name = f"@{u['username']}" if u["username"] else f"id {u['id']}"
+        return f"{badge} {name}" + (" 🚫" if u["is_banned"] else "")
+
+    rows = [[_btn(label(u, "🛠"), AdminCb(act="person", arg=u["id"]))] for u in admins]
+    rows += [[_btn(label(u, "👑"), AdminCb(act="person", arg=u["id"]))] for u in kerivnyky]
+    return _kb(*rows)
+
+
+def person_card_kb(user, viewer_is_main_admin: bool) -> InlineKeyboardMarkup:
+    uid = user["id"]
+    rows = []
+    if user["role"] == "kerivnyk":
+        rows.append([_btn("👑 Зняти роль керівника", AdminCb(act="rm_kerivnyk", arg=uid))])
+    elif user["role"] != "admin":
+        rows.append([_btn("👑 Зробити керівником", AdminCb(act="mk_kerivnyk", arg=uid))])
+    if viewer_is_main_admin:
+        if user["role"] == "admin":
+            rows.append([_btn("🛠 Зняти роль адміністратора", AdminCb(act="rm_admin", arg=uid))])
+        else:
+            rows.append([_btn("🛠 Зробити адміністратором", AdminCb(act="mk_admin", arg=uid))])
+    if user["is_banned"]:
+        rows.append([_btn("✅ Розбанити", AdminCb(act="unban_ask", arg=uid))])
+    else:
+        rows.append([_btn("🚫 Забанити", AdminCb(act="ban_ask", arg=uid))])
+    rows.append([_btn("🗑 Видалити дані (як /forget)", AdminCb(act="forget_ask", arg=uid))])
+    rows.append([_btn("⬅️ До списку", AdminCb(act="people"))])
+    return _kb(*rows)
 
 
 def report_kb(report_id: int) -> InlineKeyboardMarkup:

@@ -4,7 +4,9 @@ import logging
 import os
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import BaseFilter, Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app import keyboards as kb
@@ -12,6 +14,8 @@ from app import texts
 from app.config import ADMIN_ID, DB_PATH
 from app.db import repo
 from app import runtime
+from app.services import validators
+from app.states import BanReason
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -221,9 +225,9 @@ async def admin_limits(cb: CallbackQuery) -> None:
         "Персональний виняток: /set_limit @username 10 200\n"
         "(перше число — команди, друге — учасники; «-» = скинути виняток)\n"
         "Разовий на команду: /set_team_limit <team_id> <число|->\n"
-        "Бан: /ban @username причина · Розбан: /unban @username\n"
+        "Бан: /ban @username <причина від 10 символів> · Розбан: /unban @username\n"
         "Видалити дані людини на її запит: /forget @username\n"
-        "Адміни (лише головний): /make_admin @username · /remove_admin @username"
+        "Ролі: /setrole @username user|kerivnyk|admin (admin — лише головний)"
     )
     await cb.answer()
 
@@ -244,6 +248,193 @@ async def admin_toggle_registration(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
+# ------------------------------------------------------------------ люди з ролями
+
+_ROLE_LABELS = {"admin": "адміністратор 🛠", "kerivnyk": "керівник 👑", "user": "користувач"}
+
+
+def _person_card_text(user) -> str:
+    lines = [
+        f"Людина: id {user['id']}" + (f" (@{user['username']})" if user["username"] else ""),
+        f"Роль: {_ROLE_LABELS.get(user['role'], user['role'])}",
+        f"Вперше в боті: {user['first_seen_at']} (UTC)",
+        f"Востаннє: {user['last_seen_at']} (UTC)",
+    ]
+    if user["is_banned"]:
+        by = "головний адмін" if user["banned_by"] == ADMIN_ID else f"адмін id {user['banned_by']}"
+        lines.append(
+            f"\nБан 🚫 від: {by}, {user['banned_at'] or 'дата невідома'}\n"
+            f"Причина: {user['ban_reason'] or 'не вказана'}"
+        )
+    return "\n".join(lines)
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "people"))
+async def admin_people(cb: CallbackQuery) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    admins = await repo.users_by_role("admin")
+    kerivnyky = await repo.users_by_role("kerivnyk")
+    if not admins and not kerivnyky:
+        await cb.answer("Поки що ролей ні в кого немає 🙂", show_alert=True)
+        return
+    text = (
+        f"👥 Люди з ролями: адміністраторів {len(admins)}, керівників {len(kerivnyky)}.\n"
+        "Тап по людині — картка з діями.\n"
+        "(Головний адмін живе в конфігурації і в списку не показується.)"
+    )
+    markup = kb.people_list_kb(admins, kerivnyky)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await cb.message.answer(text, reply_markup=markup)
+    await cb.answer()
+
+
+async def _render_person_card(cb: CallbackQuery, user_id: int) -> None:
+    user = await repo.get_user(user_id)
+    if user is None:
+        await cb.answer("Користувача не знайдено", show_alert=True)
+        return
+    markup = kb.person_card_kb(user, cb.from_user.id == ADMIN_ID)
+    try:
+        await cb.message.edit_text(_person_card_text(user), reply_markup=markup)
+    except Exception:
+        await cb.message.answer(_person_card_text(user), reply_markup=markup)
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "person"))
+async def admin_person(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    await _render_person_card(cb, callback_data.arg)
+    await cb.answer()
+
+
+_CARD_ROLE_ACTIONS = {
+    "mk_kerivnyk": "kerivnyk",
+    "rm_kerivnyk": "user",
+    "mk_admin": "admin",
+    "rm_admin": "user",
+}
+
+
+@router.callback_query(kb.AdminCb.filter(F.act.in_(set(_CARD_ROLE_ACTIONS))))
+async def admin_person_role(cb: CallbackQuery, callback_data: kb.AdminCb, bot: Bot) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    user = await repo.get_user(callback_data.arg)
+    if user is None:
+        await cb.answer("Користувача не знайдено", show_alert=True)
+        return
+    result = await _apply_role(cb.from_user.id, user, _CARD_ROLE_ACTIONS[callback_data.act], bot)
+    await cb.answer(result, show_alert=True)
+    await _render_person_card(cb, user["id"])
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "unban_ask"))
+async def admin_unban_ask(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    user = await repo.get_user(callback_data.arg)
+    if user is None or not user["is_banned"]:
+        await cb.answer("Користувач і так не забанений 🙂", show_alert=True)
+        return
+    refusal = _unban_refusal(cb.from_user.id, user)
+    if refusal:
+        await cb.answer(refusal, show_alert=True)
+        return
+    await _unban_preview(user, cb.message.answer)
+    await cb.answer()
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "ban_ask"))
+async def admin_ban_ask(cb: CallbackQuery, callback_data: kb.AdminCb, state: FSMContext) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    user = await repo.get_user(callback_data.arg)
+    if user is None:
+        await cb.answer("Користувача не знайдено", show_alert=True)
+        return
+    refusal = await _ban_checks(cb.from_user.id, user)
+    if refusal:
+        await cb.answer(refusal, show_alert=True)
+        return
+    await state.set_state(BanReason.reason)
+    await state.update_data(target_id=user["id"])
+    await cb.message.answer(texts.BAN_ASK_REASON)
+    await cb.answer()
+
+
+@router.message(BanReason.reason, F.text)
+async def ban_reason_input(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if raw.startswith("/") or raw in kb.MENU_BUTTONS:
+        await state.clear()
+        raise SkipHandler
+    reason = validators.ban_reason(raw)
+    if reason is None:
+        await message.answer(texts.BAN_REASON_INVALID)
+        return
+    data = await state.get_data()
+    await state.clear()
+    user = await repo.get_user(data["target_id"])
+    if user is None:
+        await message.answer("Користувача не знайдено.")
+        return
+    refusal = await _ban_checks(message.from_user.id, user)
+    if refusal:
+        await message.answer(refusal)
+        return
+    await _apply_ban(message.from_user.id, user, reason, message.answer)
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "forget_ask"))
+async def admin_forget_ask(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    user = await repo.get_user(callback_data.arg)
+    if user is None:
+        await cb.answer("Користувача не знайдено", show_alert=True)
+        return
+    await cb.message.answer(
+        f"Точно видалити всі анкети й архівні копії людини id {user['id']}"
+        + (f" (@{user['username']})" if user["username"] else "") + "?\n"
+        "Це незворотно — як команда /forget, з квитанцією всім адмінам.",
+        reply_markup=kb.confirm_kb(
+            kb.AdminCb(act="forget_yes", arg=user["id"]),
+            kb.AdminCb(act="forget_no", arg=user["id"]),
+            yes_text="🗑 Так, видалити",
+        ),
+    )
+    await cb.answer()
+
+
+@router.callback_query(kb.AdminCb.filter(F.act.in_({"forget_yes", "forget_no"})))
+async def admin_forget_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot: Bot) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    if callback_data.act == "forget_no":
+        await cb.message.edit_text("Окей, нічого не видаляю ✖️")
+        await cb.answer()
+        return
+    user = await repo.get_user(callback_data.arg)
+    if user is None:
+        await cb.answer("Користувача не знайдено", show_alert=True)
+        return
+    receipt = await _do_forget(user, cb.from_user.id)
+    await cb.message.edit_text(receipt)
+    await notify_admins(bot, receipt, exclude_id=cb.from_user.id)
+    await cb.answer()
+
+
 # ------------------------------------------------------------------ текстові адмін-команди
 
 async def _resolve_user(arg: str):
@@ -253,27 +444,68 @@ async def _resolve_user(arg: str):
     return await repo.find_user_by_username(arg)
 
 
+# --- бан: причина обовʼязкова і змістовна ---
+
+async def _ban_checks(actor_id: int, user) -> str | None:
+    """Перевірки перед баном. Повертає текст відмови або None, якщо можна."""
+    if user["id"] == ADMIN_ID:
+        return "Головного адміна забанити не можна 🙂"
+    if await repo.is_admin(user["id"], ADMIN_ID) and actor_id != ADMIN_ID:
+        return "Іншого адміністратора може банити лише головний адмін."
+    return None
+
+
+async def _apply_ban(actor_id: int, user, reason: str, answer) -> None:
+    await repo.set_ban(user["id"], True, reason, banned_by=actor_id)
+    runtime.access_middleware.invalidate_ban_cache(user["id"])
+    log.info("Бан користувача %s від %s: %s", user["id"], actor_id, reason)
+    await answer(f"Користувача id {user['id']} забанено 🚫")
+
+
 @router.message(Command("ban"), admin_only)
 async def cmd_ban(message: Message, command: CommandObject) -> None:
     parts = (command.args or "").split(maxsplit=1)
     if not parts:
-        await message.answer("Формат: /ban @username причина")
+        await message.answer(texts.BAN_FORMAT)
         return
     user = await _resolve_user(parts[0])
     if user is None:
         await message.answer("Не знайшов такого користувача.")
         return
-    if user["id"] == ADMIN_ID:
-        await message.answer("Головного адміна забанити не можна 🙂")
+    refusal = await _ban_checks(message.from_user.id, user)
+    if refusal:
+        await message.answer(refusal)
         return
-    if await repo.is_admin(user["id"], ADMIN_ID) and message.from_user.id != ADMIN_ID:
-        await message.answer("Іншого адміністратора може банити лише головний адмін.")
+    reason = validators.ban_reason(parts[1] if len(parts) > 1 else "")
+    if reason is None:
+        await message.answer(texts.BAN_REASON_INVALID)
         return
-    reason = parts[1] if len(parts) > 1 else "без причини"
-    await repo.set_ban(user["id"], True, reason, banned_by=message.from_user.id)
-    runtime.access_middleware.invalidate_ban_cache(user["id"])
-    log.info("Бан користувача %s від %s: %s", user["id"], message.from_user.id, reason)
-    await message.answer(f"Користувача id {user['id']} забанено 🚫")
+    await _apply_ban(message.from_user.id, user, reason, message.answer)
+
+
+# --- розбан: спершу показати, хто/коли/чому банив, потім підтвердження ---
+
+def _unban_refusal(actor_id: int, user) -> str | None:
+    if user["is_banned"] and user["banned_by"] == ADMIN_ID and actor_id != ADMIN_ID:
+        return "Цього користувача забанив головний адмін — зняти бан може лише він."
+    return None
+
+
+async def _unban_preview(user, answer) -> None:
+    banned_by = user["banned_by"]
+    by = "головний адмін" if banned_by == ADMIN_ID else f"адмін id {banned_by}"
+    await answer(
+        f"Користувач id {user['id']}"
+        + (f" (@{user['username']})" if user["username"] else "") + "\n"
+        f"Забанений: {by}, {user['banned_at'] or 'дата невідома'} (UTC)\n"
+        f"Причина: {user['ban_reason'] or 'не вказана'}\n\n"
+        "Зняти бан?",
+        reply_markup=kb.confirm_kb(
+            kb.AdminCb(act="unban_yes", arg=user["id"]),
+            kb.AdminCb(act="unban_no", arg=user["id"]),
+            yes_text="✅ Розбанити",
+        ),
+    )
 
 
 @router.message(Command("unban"), admin_only)
@@ -282,63 +514,87 @@ async def cmd_unban(message: Message, command: CommandObject) -> None:
     if user is None:
         await message.answer("Не знайшов такого користувача.")
         return
-    if (
-        user["is_banned"]
-        and user["banned_by"] == ADMIN_ID
-        and message.from_user.id != ADMIN_ID
-    ):
-        await message.answer(
-            "Цього користувача забанив головний адмін — зняти бан може лише він."
-        )
+    if not user["is_banned"]:
+        await message.answer(f"Користувач id {user['id']} і так не забанений 🙂")
+        return
+    refusal = _unban_refusal(message.from_user.id, user)
+    if refusal:
+        await message.answer(refusal)
+        return
+    await _unban_preview(user, message.answer)
+
+
+@router.callback_query(kb.AdminCb.filter(F.act.in_({"unban_yes", "unban_no"})))
+async def admin_unban_decide(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    user = await repo.get_user(callback_data.arg)
+    if user is None:
+        await cb.answer("Користувача не знайдено", show_alert=True)
+        return
+    if callback_data.act == "unban_no":
+        await cb.message.edit_text("Окей, бан лишається ✖️")
+        await cb.answer()
+        return
+    if not user["is_banned"]:
+        await cb.message.edit_text(f"Користувач id {user['id']} вже не забанений 🙂")
+        await cb.answer()
+        return
+    refusal = _unban_refusal(cb.from_user.id, user)
+    if refusal:
+        await cb.answer(refusal, show_alert=True)
         return
     await repo.set_ban(user["id"], False, None)
     runtime.access_middleware.invalidate_ban_cache(user["id"])
-    log.info("Розбан користувача %s від %s", user["id"], message.from_user.id)
-    await message.answer(f"Користувача id {user['id']} розбанено ✅")
+    log.info("Розбан користувача %s від %s", user["id"], cb.from_user.id)
+    await cb.message.edit_text(f"Користувача id {user['id']} розбанено ✅")
+    await cb.answer()
 
 
-@router.message(Command("make_admin"), F.from_user.id == ADMIN_ID)
-async def cmd_make_admin(message: Message, command: CommandObject, bot: Bot) -> None:
-    user = await _resolve_user(command.args or "")
+# --- одна команда керування ролями ---
+
+async def _apply_role(actor_id: int, user, new_role: str, bot: Bot) -> str:
+    """Змінити роль з усіма перевірками. Повертає текст відповіді для адміна."""
+    if user["id"] == ADMIN_ID:
+        return "Роль головного адміна змінити не можна 🙂"
+    if (new_role == "admin" or user["role"] == "admin") and actor_id != ADMIN_ID:
+        return "Призначати і знімати адміністраторів може лише головний адмін."
+    if user["role"] == new_role:
+        return f"У людини id {user['id']} вже роль {new_role} 🙂"
+    await repo.set_role(user["id"], new_role)
+    if new_role == "admin":
+        runtime.throttling_middleware.add_admin(user["id"])
+    else:
+        runtime.throttling_middleware.discard_admin(user["id"])
+    log.info("Роль користувача %s: %s → %s (від %s)", user["id"], user["role"], new_role, actor_id)
+    notice = {
+        "admin": "Тобі надано роль адміністратора 🛠 Панель: /admin, довідка — /help.",
+        "kerivnyk": texts.ROLE_APPROVED,
+        "user": "Твою роль змінено на звичайного користувача. Якщо потрібна роль "
+                "керівника — подай заявку через /role.",
+    }[new_role]
+    try:
+        await bot.send_message(user["id"], notice)
+    except Exception:
+        pass
+    return f"Готово ✅ id {user['id']}: роль тепер {new_role}."
+
+
+@router.message(Command("setrole"), admin_only)
+async def cmd_setrole(message: Message, command: CommandObject, bot: Bot) -> None:
+    parts = (command.args or "").split()
+    if len(parts) != 2 or parts[1] not in ("user", "kerivnyk", "admin"):
+        await message.answer(
+            "Формат: /setrole @username user|kerivnyk|admin\n"
+            "(admin — призначає і знімає лише головний адмін)"
+        )
+        return
+    user = await _resolve_user(parts[0])
     if user is None:
         await message.answer("Не знайшов такого користувача (він має хоч раз запустити бота).")
         return
-    if user["id"] == ADMIN_ID or user["role"] == "admin":
-        await message.answer("Ця людина вже адміністратор 🙂")
-        return
-    await repo.set_role(user["id"], "admin")
-    runtime.throttling_middleware.add_admin(user["id"])
-    log.info("Користувача %s призначено адміністратором", user["id"])
-    await message.answer(f"Готово ✅ id {user['id']} тепер адміністратор.")
-    try:
-        await bot.send_message(
-            user["id"],
-            "Тобі надано роль адміністратора 🛠 Панель: /admin, довідка по командах — "
-            "кнопка «⚙️ Ліміти» в панелі.",
-        )
-    except Exception:
-        pass
-
-
-@router.message(Command("remove_admin"), F.from_user.id == ADMIN_ID)
-async def cmd_remove_admin(message: Message, command: CommandObject) -> None:
-    user = await _resolve_user(command.args or "")
-    if user is None:
-        await message.answer("Не знайшов такого користувача.")
-        return
-    if user["id"] == ADMIN_ID:
-        await message.answer("Головного адміна зняти не можна 🙂")
-        return
-    if user["role"] != "admin":
-        await message.answer("Ця людина й так не адміністратор.")
-        return
-    await repo.set_role(user["id"], "user")
-    runtime.throttling_middleware.discard_admin(user["id"])
-    log.info("Користувача %s знято з адміністраторів", user["id"])
-    await message.answer(
-        f"Готово ✅ id {user['id']} більше не адміністратор (роль — звичайний користувач; "
-        "якщо треба керівник — нехай подасть /role)."
-    )
+    await message.answer(await _apply_role(message.from_user.id, user, parts[1], bot))
 
 
 @router.message(Command("set_default"), admin_only)
@@ -411,29 +667,33 @@ async def cmd_set_team_limit(message: Message, command: CommandObject) -> None:
     )
 
 
-@router.message(Command("forget"), admin_only)
-async def cmd_forget(message: Message, command: CommandObject, bot: Bot) -> None:
-    """Точкове видалення даних людини на її запит, не чекаючи ретенції."""
-    user = await _resolve_user(command.args or "")
-    if user is None:
-        await message.answer("Формат: /forget @username (або числовий id)")
-        return
+async def _do_forget(user, actor_id: int) -> str:
+    """Точкове видалення даних людини на її запит. Повертає квитанцію."""
     counts = await repo.delete_user_data(user["id"])
     from app.db.core import now
     stamp = now()
     log.info(
         "FORGET: адмін %s видалив дані користувача %s (%s анкет, %s архівних) о %s",
-        message.from_user.id, user["id"], counts["forms"], counts["archive"], stamp,
+        actor_id, user["id"], counts["forms"], counts["archive"], stamp,
     )
-    receipt = (
+    return (
         "🧾 Квитанція про видалення даних\n\n"
         f"Користувач: id {user['id']}"
         + (f" (@{user['username']})" if user["username"] else "") + "\n"
         f"Видалено анкет: {counts['forms']}, архівних копій: {counts['archive']}\n"
         f"Час (UTC): {stamp}\n"
-        f"Виконав: адмін id {message.from_user.id}\n\n"
+        f"Виконав: адмін id {actor_id}\n\n"
         "Це повідомлення можна переслати людині як підтвердження."
     )
+
+
+@router.message(Command("forget"), admin_only)
+async def cmd_forget(message: Message, command: CommandObject, bot: Bot) -> None:
+    user = await _resolve_user(command.args or "")
+    if user is None:
+        await message.answer("Формат: /forget @username (або числовий id)")
+        return
+    receipt = await _do_forget(user, message.from_user.id)
     await message.answer(receipt)
     await notify_admins(bot, receipt, exclude_id=message.from_user.id)
 

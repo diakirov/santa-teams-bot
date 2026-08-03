@@ -44,7 +44,7 @@ class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self) -> None:
         self._buckets: dict[int, _Bucket] = {}
         # адміни проходять без обмежень; множина живе в памʼяті,
-        # оновлюється на старті та при /make_admin, /remove_admin
+        # оновлюється на старті та при зміні ролей (/setrole, картки людей)
         self._admin_ids: set[int] = set()
         self._main_admin_id: int | None = None
 

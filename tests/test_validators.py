@@ -1,4 +1,5 @@
 from app.services.validators import (
+    ban_reason,
     format_short_name,
     has_forbidden_scheme,
     has_url,
@@ -28,6 +29,24 @@ def test_short_name():
     assert format_short_name("Петренко") == "Петренко"
     assert format_short_name("Коваль Анна-Марія") == "Коваль А."
     assert format_short_name("") == ""
+
+
+def test_ban_reason_length():
+    assert ban_reason("123456789") is None            # 9 символів — мало
+    assert ban_reason("спам у чаті") == "спам у чаті"  # 11 — ок
+    assert ban_reason("x" * 501) is None               # задовга
+
+
+def test_ban_reason_rejects_filler():
+    assert ban_reason("++++++++++") is None
+    assert ban_reason("аааааааааааа") is None
+    assert ban_reason("+-+-+-+-+-+-") is None
+
+
+def test_ban_reason_normalizes_whitespace():
+    assert ban_reason("  спам   у\n чаті  ") == "спам у чаті"
+    # пробілами до 10 символів не дотягнути
+    assert ban_reason("аб   вг    д") is None
 
 
 def test_urls():

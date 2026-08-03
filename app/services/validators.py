@@ -10,6 +10,8 @@ MAX_ALLERGIES = 500
 MAX_WISHES = 1000
 MAX_TEAM_NAME = 64
 MAX_REPORT_REASON = 500
+MIN_BAN_REASON = 10
+MAX_BAN_REASON = 500
 
 _URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _BAD_SCHEME_RE = re.compile(r"\b(?!https?:)[a-z][a-z0-9+.-]{1,20}://", re.IGNORECASE)
@@ -35,6 +37,19 @@ def has_url(text: str) -> bool:
 def has_forbidden_scheme(text: str) -> bool:
     """Посилання дозволені лише http/https — javascript:, tg:, ftp: тощо відхиляємо."""
     return bool(_BAD_SCHEME_RE.search(text))
+
+
+def ban_reason(raw: str) -> str | None:
+    """Причина бану: обовʼязкова, змістовна. Повертає нормалізований текст або None.
+
+    Відсіює закороткі рядки і «відписки» на кшталт `++++++++++`.
+    """
+    reason = " ".join(raw.split())
+    if not (MIN_BAN_REASON <= len(reason) <= MAX_BAN_REASON):
+        return None
+    if len(set(reason.replace(" ", ""))) < 3:
+        return None
+    return reason
 
 
 def format_short_name(full_name: str) -> str:

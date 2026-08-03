@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_banned            INTEGER NOT NULL DEFAULT 0,
     ban_reason           TEXT,
     banned_by            INTEGER,                       -- хто наклав бан (для правила «бан головного знімає лише головний»)
+    banned_at            TEXT,
     max_teams_override   INTEGER,
     max_members_override INTEGER,
     first_seen_at        TEXT NOT NULL,

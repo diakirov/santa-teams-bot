@@ -40,6 +40,9 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
     if "banned_by" not in columns:
         await conn.execute("ALTER TABLE users ADD COLUMN banned_by INTEGER")
         log.info("Міграція: додано users.banned_by")
+    if "banned_at" not in columns:
+        await conn.execute("ALTER TABLE users ADD COLUMN banned_at TEXT")
+        log.info("Міграція: додано users.banned_at")
 
 
 def db() -> aiosqlite.Connection:

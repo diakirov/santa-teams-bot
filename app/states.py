@@ -28,3 +28,7 @@ class AddMember(StatesGroup):
 
 class ReportReason(StatesGroup):
     reason = State()
+
+
+class BanReason(StatesGroup):
+    reason = State()

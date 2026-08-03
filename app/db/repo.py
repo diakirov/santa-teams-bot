@@ -43,8 +43,14 @@ async def set_ban(
     user_id: int, banned: bool, reason: str | None = None, banned_by: int | None = None
 ) -> None:
     await db().execute(
-        "UPDATE users SET is_banned=?, ban_reason=?, banned_by=? WHERE id=?",
-        (1 if banned else 0, reason, banned_by if banned else None, user_id),
+        "UPDATE users SET is_banned=?, ban_reason=?, banned_by=?, banned_at=? WHERE id=?",
+        (
+            1 if banned else 0,
+            reason,
+            banned_by if banned else None,
+            now() if banned else None,
+            user_id,
+        ),
     )
     await db().commit()
 
@@ -66,6 +72,14 @@ async def effective_role(user_id: int, main_admin_id: int) -> str:
         return "admin"
     user = await get_user(user_id)
     return user["role"] if user else "user"
+
+
+async def users_by_role(role: str) -> list[Row]:
+    cur = await db().execute(
+        "SELECT * FROM users WHERE role=? ORDER BY lower(coalesce(username,'')), id",
+        (role,),
+    )
+    return list(await cur.fetchall())
 
 
 async def admin_ids(main_admin_id: int) -> list[int]:
