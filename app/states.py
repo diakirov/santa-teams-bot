@@ -32,3 +32,7 @@ class ReportReason(StatesGroup):
 
 class BanReason(StatesGroup):
     reason = State()
+
+
+class FeedbackText(StatesGroup):
+    text = State()

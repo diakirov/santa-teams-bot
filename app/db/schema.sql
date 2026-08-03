@@ -103,8 +103,10 @@ CREATE TABLE IF NOT EXISTS pairs (
 CREATE TABLE IF NOT EXISTS reports (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     reporter_id      INTEGER NOT NULL REFERENCES users(id),
-    reported_user_id INTEGER NOT NULL REFERENCES users(id),
+    reported_user_id INTEGER NOT NULL REFERENCES users(id),  -- для фідбеку = reporter_id
     team_id          INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+    type             TEXT NOT NULL DEFAULT 'user'
+                     CHECK (type IN ('user', 'bug', 'idea')),
     reason           TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'open'
                      CHECK (status IN ('open', 'banned', 'dismissed')),

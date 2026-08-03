@@ -110,24 +110,40 @@ async def admin_stats(cb: CallbackQuery) -> None:
     await cb.answer()
 
 
-@router.callback_query(kb.AdminCb.filter(F.act == "reports"))
-async def admin_reports(cb: CallbackQuery) -> None:
+async def _list_reports(cb: CallbackQuery, kind: str | None) -> None:
+    reports = await repo.open_reports(kind)
+    if not reports:
+        await cb.answer("Тут порожньо 👌", show_alert=True)
+        return
+    for r in reports[:10]:
+        if r["type"] == "user":
+            username = f"@{r['reported_username']}" if r["reported_username"] else ""
+            await cb.message.answer(
+                f"Скарга #{r['id']} від {r['created_at']}\n"
+                f"На: {username} (id {r['reported_user_id']})\n"
+                f"Причина: {r['reason']}",
+                reply_markup=kb.report_kb(r["id"]),
+            )
+        else:
+            label = "🐞 Баг-репорт" if r["type"] == "bug" else "💡 Пропозиція"
+            await cb.message.answer(
+                f"{label} #{r['id']} від {r['created_at']}\n"
+                f"Від: id {r['reporter_id']}\n\n{r['reason']}",
+                reply_markup=kb.feedback_done_kb(r["id"]),
+            )
+    if len(reports) > 10:
+        await cb.message.answer(f"…і ще {len(reports) - 10} у черзі.")
+    await cb.message.answer("Показати:", reply_markup=kb.reports_filter_kb())
+    await cb.answer()
+
+
+@router.callback_query(kb.AdminCb.filter(F.act.in_({"reports", "rep_f_user", "rep_f_fb"})))
+async def admin_reports(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
     if not await _is_admin_cb(cb):
         await cb.answer("Ця дія недоступна", show_alert=True)
         return
-    reports = await repo.open_reports()
-    if not reports:
-        await cb.answer("Скарг немає 👌", show_alert=True)
-        return
-    for r in reports[:10]:
-        username = f"@{r['reported_username']}" if r["reported_username"] else ""
-        await cb.message.answer(
-            f"Скарга #{r['id']} від {r['created_at']}\n"
-            f"На: {username} (id {r['reported_user_id']})\n"
-            f"Причина: {r['reason']}",
-            reply_markup=kb.report_kb(r["id"]),
-        )
-    await cb.answer()
+    kind = {"reports": None, "rep_f_user": "user", "rep_f_fb": "feedback"}[callback_data.act]
+    await _list_reports(cb, kind)
 
 
 @router.callback_query(kb.AdminCb.filter(F.act.in_({"rep_ban", "rep_dismiss"})))
@@ -140,6 +156,9 @@ async def admin_report_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot:
         await cb.answer("Скаргу не знайдено", show_alert=True)
         return
     ban = callback_data.act == "rep_ban"
+    if ban and report["type"] != "user":
+        await cb.answer("Це фідбек на бота — тут нема кого банити 🙂", show_alert=True)
+        return
     if ban and await repo.is_admin(report["reported_user_id"], ADMIN_ID) and cb.from_user.id != ADMIN_ID:
         await cb.answer("Адміністратора може банити лише головний адмін", show_alert=True)
         return
@@ -157,18 +176,21 @@ async def admin_report_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot:
                  report["reported_user_id"], report["id"], cb.from_user.id)
         outcome = "користувача забанено 🚫"
     else:
-        outcome = "відхилено ✖️"
-    await cb.message.edit_text(f"Скарга #{report['id']}: {outcome}")
+        outcome = "опрацьовано ✔️" if report["type"] != "user" else "відхилено ✖️"
+    what = "Скаргу" if report["type"] == "user" else "Фідбек"
+    await cb.message.edit_text(f"{what} #{report['id']}: {outcome}")
     await notify_admins(
         bot,
-        f"ℹ️ Скаргу #{report['id']} розглянув @{cb.from_user.username or cb.from_user.id}: {outcome}",
+        f"ℹ️ {what} #{report['id']} розглянув @{cb.from_user.username or cb.from_user.id}: {outcome}",
         exclude_id=cb.from_user.id,
     )
+    thanks = (
+        f"Твою скаргу #{report['id']} розглянуто. Дякую, що допомагаєш тримати гру чесною 🙌"
+        if report["type"] == "user"
+        else f"Твій фідбек #{report['id']} опрацьовано. Дякую, що допомагаєш робити бота кращим 🙌"
+    )
     try:
-        await bot.send_message(
-            report["reporter_id"],
-            f"Твою скаргу #{report['id']} розглянуто. Дякую, що допомагаєш тримати гру чесною 🙌",
-        )
+        await bot.send_message(report["reporter_id"], thanks)
     except Exception:
         pass
     await cb.answer()

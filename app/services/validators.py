@@ -12,6 +12,7 @@ MAX_TEAM_NAME = 64
 MAX_REPORT_REASON = 500
 MIN_BAN_REASON = 10
 MAX_BAN_REASON = 500
+MAX_FEEDBACK = 1000
 
 _URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _BAD_SCHEME_RE = re.compile(r"\b(?!https?:)[a-z][a-z0-9+.-]{1,20}://", re.IGNORECASE)

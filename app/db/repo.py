@@ -551,21 +551,31 @@ async def purge_archive(days: int = 365) -> int:
 # ------------------------------------------------------------------ reports / roles
 
 async def create_report(
-    reporter_id: int, reported_user_id: int, team_id: int | None, reason: str
+    reporter_id: int,
+    reported_user_id: int,
+    team_id: int | None,
+    reason: str,
+    report_type: str = "user",
 ) -> int:
     cur = await db().execute(
-        "INSERT INTO reports (reporter_id, reported_user_id, team_id, reason, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (reporter_id, reported_user_id, team_id, reason, now()),
+        "INSERT INTO reports (reporter_id, reported_user_id, team_id, type, reason, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (reporter_id, reported_user_id, team_id, report_type, reason, now()),
     )
     await db().commit()
     return cur.lastrowid
 
 
-async def open_reports() -> list[Row]:
+async def open_reports(kind: str | None = None) -> list[Row]:
+    """kind: None — всі, 'user' — скарги на людей, 'feedback' — bug + idea."""
+    where = "r.status='open'"
+    if kind == "user":
+        where += " AND r.type='user'"
+    elif kind == "feedback":
+        where += " AND r.type IN ('bug','idea')"
     cur = await db().execute(
         "SELECT r.*, u.username AS reported_username FROM reports r "
-        "JOIN users u ON u.id=r.reported_user_id WHERE r.status='open' ORDER BY r.created_at"
+        f"JOIN users u ON u.id=r.reported_user_id WHERE {where} ORDER BY r.created_at"
     )
     return list(await cur.fetchall())
 

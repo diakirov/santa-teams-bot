@@ -59,6 +59,10 @@ class ArchiveCb(CallbackData, prefix="ar"):
     game_id: int
 
 
+class FeedbackCb(CallbackData, prefix="fb"):
+    kind: str  # bug | idea
+
+
 def _btn(text: str, cb: CallbackData) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=cb.pack())
 
@@ -250,6 +254,25 @@ def report_kb(report_id: int) -> InlineKeyboardMarkup:
         [_btn("🚫 Забанити глобально", AdminCb(act="rep_ban", arg=report_id))],
         [_btn("✖️ Відхилити скаргу", AdminCb(act="rep_dismiss", arg=report_id))],
     )
+
+
+def feedback_type_kb() -> InlineKeyboardMarkup:
+    return _kb(
+        [_btn("🐞 Щось не працює", FeedbackCb(kind="bug"))],
+        [_btn("💡 Є пропозиція", FeedbackCb(kind="idea"))],
+    )
+
+
+def feedback_done_kb(report_id: int) -> InlineKeyboardMarkup:
+    return _kb([_btn("✔️ Опрацьовано", AdminCb(act="rep_dismiss", arg=report_id))])
+
+
+def reports_filter_kb() -> InlineKeyboardMarkup:
+    return _kb([
+        _btn("👤 Скарги", AdminCb(act="rep_f_user")),
+        _btn("🐞💡 Фідбек", AdminCb(act="rep_f_fb")),
+        _btn("Усі", AdminCb(act="reports")),
+    ])
 
 
 def role_request_kb(request_id: int) -> InlineKeyboardMarkup:

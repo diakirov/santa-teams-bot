@@ -2,19 +2,19 @@
 
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from app import keyboards as kb
 from app import texts
 from app.config import ADMIN_ID
 from app.db import repo
 from app.routers.joining import join_team_by_code
-from app.services import invites, limits
-from app.states import EnterCode, FormFill
+from app.services import invites, limits, validators
+from app.states import EnterCode, FeedbackText, FormFill
 
 log = logging.getLogger(__name__)
 router = Router(name="start")
@@ -60,6 +60,50 @@ async def help_cmd(message: Message) -> None:
         )
     await message.answer(
         texts.help_text(role, limits.retention_days(role), user_limits)
+    )
+
+
+# ------------------------------------------------------------------ фідбек на бота
+
+@router.message(Command("feedback"))
+async def feedback_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(texts.FEEDBACK_ASK_TYPE, reply_markup=kb.feedback_type_kb())
+
+
+@router.callback_query(kb.FeedbackCb.filter())
+async def feedback_type(cb: CallbackQuery, callback_data: kb.FeedbackCb, state: FSMContext) -> None:
+    await state.set_state(FeedbackText.text)
+    await state.update_data(kind=callback_data.kind)
+    await cb.message.answer(texts.FEEDBACK_ASK_TEXT)
+    await cb.answer()
+
+
+@router.message(FeedbackText.text, F.text)
+async def feedback_create(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = (message.text or "").strip()
+    if text.startswith("/") or text in kb.MENU_BUTTONS:
+        await state.clear()
+        raise SkipHandler
+    if len(text) > validators.MAX_FEEDBACK:
+        await message.answer(texts.form_too_long(validators.MAX_FEEDBACK))
+        return
+    data = await state.get_data()
+    await state.clear()
+    kind = data.get("kind", "bug")
+    # фідбек — «скарга на бота»: reported_user_id = сам автор, команда не потрібна
+    report_id = await repo.create_report(
+        message.from_user.id, message.from_user.id, None, text, report_type=kind
+    )
+    await message.answer(texts.FEEDBACK_SENT)
+    label = "🐞 Баг-репорт" if kind == "bug" else "💡 Пропозиція"
+    from app.routers.admin import notify_admins
+    await notify_admins(
+        bot,
+        f"{label} #{report_id}\n"
+        f"Від: @{message.from_user.username or message.from_user.id} "
+        f"(id {message.from_user.id})\n\n{text}",
+        reply_markup=kb.feedback_done_kb(report_id),
     )
 
 
