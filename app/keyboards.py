@@ -277,12 +277,13 @@ def report_actions_kb(report_id: int, rtype: str, status: str) -> InlineKeyboard
     if status == "open":
         rows.append([_btn("🛠 Взяти в роботу", AdminCb(act="rep_take", arg=report_id))])
     if status in ("open", "in_progress"):
+        # відповідь через бота працює навіть без @username — автор точно запускав бота
+        rows.append([_btn("✉️ Написати автору", AdminCb(act="rep_reply", arg=report_id))])
         if rtype == "user":
             # довгі підписи — кожен своїм рядком, інакше Telegram обрізає текст
             rows.append([_btn("🚫 Забанити глобально", AdminCb(act="rep_ban", arg=report_id))])
             rows.append([_btn("✖️ Відхилити скаргу", AdminCb(act="rep_dismiss", arg=report_id))])
         else:
-            rows.append([_btn("✉️ Відповісти автору", AdminCb(act="rep_reply", arg=report_id))])
             rows.append([_btn("✔️ Закрити", AdminCb(act="rep_dismiss", arg=report_id))])
     return _kb(*rows) if rows else None
 

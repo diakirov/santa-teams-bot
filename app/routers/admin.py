@@ -234,16 +234,20 @@ async def admin_report_reply_send(message: Message, state: FSMContext, bot: Bot)
         return
     # відповідь без явного «взяти в роботу» — беремо автоматично, якщо ще нічия
     await repo.take_report(report["id"], message.from_user.id)
-    label = "баг-репорт" if report["type"] == "bug" else "пропозицію"
+    subject = {
+        "user": f"щодо твоєї скарги #{report['id']}",
+        "bug": f"на твій баг-репорт #{report['id']}",
+        "idea": f"на твою пропозицію #{report['id']}",
+    }[report["type"]]
     try:
         await bot.send_message(
             report["reporter_id"],
-            f"✉️ Відповідь адміна на твій {label} #{report['id']}:\n\n{text}",
+            f"✉️ Відповідь адміна {subject}:\n\n{text}",
         )
     except Exception:
         await message.answer("Не зміг доставити — людина, схоже, заблокувала бота 😕")
         return
-    log.info("Відповідь на фідбек #%s від адміна %s", report["id"], message.from_user.id)
+    log.info("Відповідь на звернення #%s від адміна %s", report["id"], message.from_user.id)
     await message.answer("Надіслано ✅ Не забудь закрити, коли питання вичерпане.")
 
 
