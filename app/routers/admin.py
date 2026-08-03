@@ -72,11 +72,19 @@ async def role_request(message: Message, bot: Bot) -> None:
 
 # ------------------------------------------------------------------ панель
 
+def _panel_text(registration_open: bool) -> str:
+    text = "Панель адміністратора 🛠"
+    if not registration_open:
+        text += "\n\n🔴 Реєстрацію закрито — нові команди зараз не створюються."
+    return text
+
+
 @router.message(Command("admin"), admin_only)
 async def admin_panel(message: Message) -> None:
+    is_open = await repo.registration_open()
     await message.answer(
-        "Панель адміністратора 🛠",
-        reply_markup=kb.admin_menu_kb(await repo.registration_open()),
+        _panel_text(is_open),
+        reply_markup=kb.admin_menu_kb(is_open, message.from_user.id == ADMIN_ID),
     )
 
 
@@ -234,16 +242,42 @@ async def admin_limits(cb: CallbackQuery) -> None:
 
 @router.callback_query(kb.AdminCb.filter(F.act == "toggle_reg"))
 async def admin_toggle_registration(cb: CallbackQuery) -> None:
-    if not await _is_admin_cb(cb):
-        await cb.answer("Ця дія недоступна", show_alert=True)
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer("Вимикач реєстрації доступний лише головному адміну", show_alert=True)
+        return
+    is_open = await repo.registration_open()
+    question = (
+        "Закрити створення нових команд? Люди не зможуть починати нові ігри, "
+        "поки реєстрацію не відкриють знову."
+        if is_open
+        else "Відкрити створення нових команд для всіх?"
+    )
+    await cb.message.answer(
+        question,
+        reply_markup=kb.confirm_kb(
+            kb.AdminCb(act="reg_yes"), kb.AdminCb(act="reg_no"),
+            yes_text="⏸ Так, закрити" if is_open else "▶️ Так, відкрити",
+        ),
+    )
+    await cb.answer()
+
+
+@router.callback_query(kb.AdminCb.filter(F.act.in_({"reg_yes", "reg_no"})))
+async def admin_toggle_registration_decide(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    if cb.from_user.id != ADMIN_ID:
+        await cb.answer("Вимикач реєстрації доступний лише головному адміну", show_alert=True)
+        return
+    if callback_data.act == "reg_no":
+        await cb.message.edit_text("Окей, нічого не міняю ✖️")
+        await cb.answer()
         return
     is_open = await repo.registration_open()
     await repo.set_setting("registration_open", "0" if is_open else "1")
     state = "закрито ⏸" if is_open else "відкрито ▶️"
     log.info("Створення нових команд: %s", state)
     await cb.message.edit_text(
-        f"Створення нових команд: {state}",
-        reply_markup=kb.admin_menu_kb(not is_open),
+        f"Створення нових команд: {state}\n\n{_panel_text(not is_open)}",
+        reply_markup=kb.admin_menu_kb(not is_open, True),
     )
     await cb.answer()
 

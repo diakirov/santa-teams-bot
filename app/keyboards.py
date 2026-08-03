@@ -198,16 +198,19 @@ def mydata_kb(game_id: int) -> InlineKeyboardMarkup:
 
 # ------------------------------------------------------------------ адмінка
 
-def admin_menu_kb(registration_open: bool) -> InlineKeyboardMarkup:
-    toggle = "⏸ Закрити реєстрацію" if registration_open else "▶️ Відкрити реєстрацію"
-    return _kb(
+def admin_menu_kb(registration_open: bool, is_main_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [_btn("📊 Статистика", AdminCb(act="stats"))],
         [_btn("⚠️ Скарги", AdminCb(act="reports"))],
         [_btn("👑 Запити ролей", AdminCb(act="roles"))],
         [_btn("👥 Люди з ролями", AdminCb(act="people"))],
         [_btn("⚙️ Ліміти", AdminCb(act="limits"))],
-        [_btn(toggle, AdminCb(act="toggle_reg"))],
-    )
+    ]
+    # вимикач реєстрації — лише головному адміну
+    if is_main_admin:
+        toggle = "⏸ Закрити реєстрацію" if registration_open else "▶️ Відкрити реєстрацію"
+        rows.append([_btn(toggle, AdminCb(act="toggle_reg"))])
+    return _kb(*rows)
 
 
 def people_list_kb(admins, kerivnyky) -> InlineKeyboardMarkup:
