@@ -292,9 +292,7 @@ async def admin_report_profile(cb: CallbackQuery, callback_data: kb.AdminCb) -> 
         user=User(id=report["reporter_id"], is_bot=False, first_name="Автор"),
     )
     await cb.message.answer(
-        f"{label} звернення #{report['id']} (id {report['reporter_id']}).\n"
-        "Якщо профіль не відкрився (буває через приватність) — "
-        "користуйся «✉️ Написати автору», це працює завжди.",
+        f"{label} звернення #{report['id']} (id {report['reporter_id']}) — тапни, щоб відкрити.",
         entities=[entity],
     )
     await cb.answer()

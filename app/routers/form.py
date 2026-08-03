@@ -16,6 +16,40 @@ from app.states import FormFill
 log = logging.getLogger(__name__)
 router = Router(name="form")
 
+
+# ------------------------------------------------------------------ гігієна чату
+#
+# Робочі повідомлення майстра (питання, відповіді, помилки, застарілі підсумки)
+# збираються в «кошик» у FSM і видаляються після збереження анкети —
+# в чаті лишається лише підсумок. Дані вже в БД, простирадло історії ні до чого.
+
+async def _push_trash(state: FSMContext, *message_ids: int | None) -> None:
+    data = await state.get_data()
+    trash = list(data.get("trash", []))
+    trash += [mid for mid in message_ids if mid]
+    await state.update_data(trash=trash[-100:])
+
+
+async def _burn_trash(bot, chat_id: int, data: dict, keep: int | None = None) -> None:
+    """keep — повідомлення, яке щойно стало підтвердженням: його не чіпаємо."""
+    for mid in data.get("trash", []):
+        if mid == keep:
+            continue
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass  # старше 48 год або вже видалене — не страшно
+
+
+async def _show_summary(message: Message, state: FSMContext) -> None:
+    """Підсумок завжди один: попередній (якщо був) — у кошик."""
+    data = await state.get_data()
+    await _push_trash(state, data.get("summary_msg_id"))
+    sent = await message.answer(
+        texts.form_summary(data), reply_markup=kb.form_confirm_kb()
+    )
+    await state.update_data(summary_msg_id=sent.message_id)
+
 _QUESTIONS = {
     FormFill.full_name.state: texts.FORM_START,
     FormFill.phone.state: texts.FORM_ASK_PHONE,
@@ -40,13 +74,16 @@ _FILL_STATES = StateFilter(
 )
 async def form_interrupted(message: Message, state: FSMContext) -> None:
     if (message.text or "").strip() == "/cancel":
+        data = await state.get_data()
         await state.clear()
         await message.answer(texts.CANCELLED, reply_markup=kb.main_menu())
+        await _burn_trash(message.bot, message.chat.id, data)
         return
     current = await state.get_state()
     await state.update_data(paused_from=current)
     await state.set_state(FormFill.paused)
-    await message.answer(texts.FORM_PAUSED, reply_markup=kb.form_paused_kb())
+    sent = await message.answer(texts.FORM_PAUSED, reply_markup=kb.form_paused_kb())
+    await _push_trash(state, message.message_id, sent.message_id)
 
 
 @router.callback_query(FormFill.paused, kb.FormCb.filter(F.act == "resume"))
@@ -54,19 +91,21 @@ async def form_resume(cb: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     paused_from = data.get("paused_from") or FormFill.full_name.state
     await state.set_state(paused_from)
-    await cb.message.answer(_QUESTIONS.get(paused_from, texts.FORM_START))
     if paused_from == FormFill.confirm.state:
-        await cb.message.answer(
-            texts.form_summary(data), reply_markup=kb.form_confirm_kb()
-        )
+        await _show_summary(cb.message, state)
+    else:
+        sent = await cb.message.answer(_QUESTIONS.get(paused_from, texts.FORM_START))
+        await _push_trash(state, sent.message_id)
     await cb.answer()
 
 
 @router.callback_query(FormFill.paused, kb.FormCb.filter(F.act == "abort"))
 async def form_abort(cb: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
     await state.clear()
     await cb.message.answer(texts.CANCELLED, reply_markup=kb.main_menu())
     await cb.answer()
+    await _burn_trash(cb.message.bot, cb.message.chat.id, data)
 
 
 # ------------------------------------------------------------------ вхідні точки
@@ -93,7 +132,8 @@ async def _start_fill(message: Message, state: FSMContext, game_id: int) -> None
             texts.form_reuse_offer(dict(latest)), reply_markup=kb.form_reuse_kb()
         )
     else:
-        await message.answer(texts.FORM_START)
+        sent = await message.answer(texts.FORM_START)
+        await _push_trash(state, sent.message_id)
 
 
 async def _open_form_entry(message: Message, state: FSMContext) -> None:
@@ -162,14 +202,12 @@ async def fill_or_edit(cb: CallbackQuery, callback_data: kb.FormCb, state: FSMCo
             # редагування — це підсумок із кнопками полів, а не майстер наново
             await state.set_state(FormFill.confirm)
             await state.update_data(game_id=game["id"], **_form_fields(form))
-            await cb.message.answer(
-                texts.form_summary(await state.get_data()),
-                reply_markup=kb.form_confirm_kb(),
-            )
+            await _show_summary(cb.message, state)
         else:
             await state.set_state(FormFill.full_name)
             await state.update_data(game_id=game["id"])
-            await cb.message.answer(texts.FORM_START)
+            sent = await cb.message.answer(texts.FORM_START)
+            await _push_trash(state, sent.message_id)
     else:
         await _start_fill(cb.message, state, game["id"])
     await cb.answer()
@@ -189,12 +227,15 @@ async def form_reuse(cb: CallbackQuery, state: FSMContext) -> None:
     log.info("Анкета користувача %s скопійована в гру %s", cb.from_user.id, game["id"])
     await cb.message.edit_text(texts.FORM_SAVED)
     await cb.answer()
+    await _burn_trash(cb.message.bot, cb.message.chat.id, data, keep=cb.message.message_id)
 
 
 @router.callback_query(FormFill.confirm, kb.FormCb.filter(F.act == "refill"))
 async def form_reuse_decline(cb: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(FormFill.full_name)
     await cb.message.edit_text(texts.FORM_START)
+    # пропозиція стала першим питанням майстра — приберемо її після збереження
+    await _push_trash(state, cb.message.message_id)
     await cb.answer()
 
 
@@ -210,6 +251,7 @@ async def form_reuse_tweak(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.message.edit_text(
         texts.form_summary(await state.get_data()), reply_markup=kb.form_confirm_kb()
     )
+    await state.update_data(summary_msg_id=cb.message.message_id)
     await cb.answer()
 
 
@@ -231,9 +273,10 @@ async def form_fix_field(cb: CallbackQuery, callback_data: kb.FormCb, state: FSM
         await cb.answer()
         return
     target_state, field = _FIX_TARGETS[callback_data.act]
-    await state.update_data(fix=True)
+    await state.update_data(fix=True, summary_msg_id=cb.message.message_id)
     await state.set_state(target_state)
-    await cb.message.answer(texts.FORM_FIX_PROMPTS[field])
+    sent = await cb.message.answer(texts.FORM_FIX_PROMPTS[field])
+    await _push_trash(state, sent.message_id)
     await cb.answer()
 
 
@@ -243,12 +286,11 @@ async def _advance(message: Message, state: FSMContext, next_state, question: st
     if data.get("fix"):
         await state.update_data(fix=False)
         await state.set_state(FormFill.confirm)
-        await message.answer(
-            texts.form_summary(await state.get_data()), reply_markup=kb.form_confirm_kb()
-        )
+        await _show_summary(message, state)
     else:
         await state.set_state(next_state)
-        await message.answer(question)
+        sent = await message.answer(question)
+        await _push_trash(state, sent.message_id)
 
 
 # ------------------------------------------------------------------ кроки
@@ -265,11 +307,21 @@ def _clean_text(message: Message, limit: int) -> tuple[str | None, str | None]:
     return text, None
 
 
+async def _step_input(message: Message, state: FSMContext, limit: int) -> str | None:
+    """Спільне для кроків: відповідь і можлива помилка — одразу в кошик."""
+    await _push_trash(state, message.message_id)
+    value, error = _clean_text(message, limit)
+    if error:
+        sent = await message.answer(error)
+        await _push_trash(state, sent.message_id)
+        return None
+    return value
+
+
 @router.message(FormFill.full_name, F.text)
 async def step_full_name(message: Message, state: FSMContext) -> None:
-    value, error = _clean_text(message, validators.MAX_FULL_NAME)
-    if error:
-        await message.answer(error)
+    value = await _step_input(message, state, validators.MAX_FULL_NAME)
+    if value is None:
         return
     await state.update_data(full_name=value)
     await _advance(message, state, FormFill.phone, texts.FORM_ASK_PHONE)
@@ -277,9 +329,11 @@ async def step_full_name(message: Message, state: FSMContext) -> None:
 
 @router.message(FormFill.phone, F.text)
 async def step_phone(message: Message, state: FSMContext) -> None:
+    await _push_trash(state, message.message_id)
     ok, phone = validators.normalize_phone(message.text or "")
     if not ok:
-        await message.answer(texts.FORM_BAD_PHONE)
+        sent = await message.answer(texts.FORM_BAD_PHONE)
+        await _push_trash(state, sent.message_id)
         return
     await state.update_data(phone=phone)
     await _advance(message, state, FormFill.address, texts.FORM_ASK_ADDRESS)
@@ -287,9 +341,8 @@ async def step_phone(message: Message, state: FSMContext) -> None:
 
 @router.message(FormFill.address, F.text)
 async def step_address(message: Message, state: FSMContext) -> None:
-    value, error = _clean_text(message, validators.MAX_ADDRESS)
-    if error:
-        await message.answer(error)
+    value = await _step_input(message, state, validators.MAX_ADDRESS)
+    if value is None:
         return
     await state.update_data(address=value)
     await _advance(message, state, FormFill.allergies, texts.FORM_ASK_ALLERGIES)
@@ -297,9 +350,8 @@ async def step_address(message: Message, state: FSMContext) -> None:
 
 @router.message(FormFill.allergies, F.text)
 async def step_allergies(message: Message, state: FSMContext) -> None:
-    value, error = _clean_text(message, validators.MAX_ALLERGIES)
-    if error:
-        await message.answer(error)
+    value = await _step_input(message, state, validators.MAX_ALLERGIES)
+    if value is None:
         return
     await state.update_data(allergies=value)
     await _advance(message, state, FormFill.wishes, texts.FORM_ASK_WISHES)
@@ -307,14 +359,12 @@ async def step_allergies(message: Message, state: FSMContext) -> None:
 
 @router.message(FormFill.wishes, F.text)
 async def step_wishes(message: Message, state: FSMContext) -> None:
-    value, error = _clean_text(message, validators.MAX_WISHES)
-    if error:
-        await message.answer(error)
+    value = await _step_input(message, state, validators.MAX_WISHES)
+    if value is None:
         return
     await state.update_data(wishes=value, fix=False)  # останній крок завжди веде на підсумок
     await state.set_state(FormFill.confirm)
-    data = await state.get_data()
-    await message.answer(texts.form_summary(data), reply_markup=kb.form_confirm_kb())
+    await _show_summary(message, state)
 
 
 @router.callback_query(FormFill.confirm, kb.FormCb.filter(F.act == "save"))
@@ -335,12 +385,18 @@ async def form_save(cb: CallbackQuery, state: FSMContext) -> None:
     log.info("Анкета користувача %s збережена для гри %s", cb.from_user.id, game["id"])
     await cb.message.edit_text(texts.FORM_SAVED)
     await cb.answer()
+    # в чаті лишається тільки це повідомлення — чернетки прибираємо
+    await _burn_trash(cb.message.bot, cb.message.chat.id, data, keep=cb.message.message_id)
 
 
 @router.callback_query(FormFill.confirm, kb.FormCb.filter(F.act == "restart"))
 async def form_restart(cb: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
-    await state.set_data({"game_id": data.get("game_id")})
+    # старий підсумок стає першим питанням — його теж приберемо після збереження
+    await state.set_data({
+        "game_id": data.get("game_id"),
+        "trash": list(data.get("trash", [])) + [cb.message.message_id],
+    })
     await state.set_state(FormFill.full_name)
     await cb.message.edit_text(texts.FORM_RESTART)
     await cb.answer()
@@ -351,5 +407,6 @@ async def form_restart(cb: CallbackQuery, state: FSMContext) -> None:
     FormFill.full_name, FormFill.phone, FormFill.address,
     FormFill.allergies, FormFill.wishes,
 ))
-async def step_not_text(message: Message) -> None:
-    await message.answer(texts.FORM_TEXT_ONLY)
+async def step_not_text(message: Message, state: FSMContext) -> None:
+    sent = await message.answer(texts.FORM_TEXT_ONLY)
+    await _push_trash(state, message.message_id, sent.message_id)
