@@ -583,9 +583,11 @@ async def reports_list(bucket: str, kind: str | None = None, limit: int = 10) ->
     # архів — свіжі згори; черга — старіші першими, щоб ніхто не висів вічно
     order = "r.resolved_at DESC" if bucket == "done" else "r.created_at"
     cur = await db().execute(
-        "SELECT r.*, u.username AS reported_username FROM reports r "
-        f"JOIN users u ON u.id=r.reported_user_id WHERE {where} "
-        f"ORDER BY {order} LIMIT ?",
+        "SELECT r.*, u.username AS reported_username, ru.username AS reporter_username "
+        "FROM reports r "
+        "JOIN users u ON u.id=r.reported_user_id "
+        "JOIN users ru ON ru.id=r.reporter_id "
+        f"WHERE {where} ORDER BY {order} LIMIT ?",
         (limit,),
     )
     return list(await cur.fetchall())
@@ -603,7 +605,14 @@ async def take_report(report_id: int, admin_id: int) -> bool:
 
 
 async def get_report(report_id: int) -> Row | None:
-    cur = await db().execute("SELECT * FROM reports WHERE id=?", (report_id,))
+    cur = await db().execute(
+        "SELECT r.*, u.username AS reported_username, ru.username AS reporter_username "
+        "FROM reports r "
+        "JOIN users u ON u.id=r.reported_user_id "
+        "JOIN users ru ON ru.id=r.reporter_id "
+        "WHERE r.id=?",
+        (report_id,),
+    )
     return await cur.fetchone()
 
 

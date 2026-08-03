@@ -118,19 +118,25 @@ _STATUS_LABELS = {
 }
 
 
+def _person_ref(user_id: int, username: str | None) -> str:
+    """@username клікабельний — адмін може одразу написати людині в лічку."""
+    return f"@{username} (id {user_id})" if username else f"id {user_id}"
+
+
 def _report_text(r) -> str:
+    reporter = _person_ref(r["reporter_id"], r["reporter_username"])
     if r["type"] == "user":
-        username = f"@{r['reported_username']}" if r["reported_username"] else ""
         text = (
             f"Скарга #{r['id']} від {r['created_at']}\n"
-            f"На: {username} (id {r['reported_user_id']})\n"
+            f"Від кого: {reporter}\n"
+            f"На: {_person_ref(r['reported_user_id'], r['reported_username'])}\n"
             f"Причина: {r['reason']}"
         )
     else:
         label = "🐞 Баг-репорт" if r["type"] == "bug" else "💡 Пропозиція"
         text = (
             f"{label} #{r['id']} від {r['created_at']}\n"
-            f"Від: id {r['reporter_id']}\n\n{r['reason']}"
+            f"Від: {reporter}\n\n{r['reason']}"
         )
     if r["status"] == "in_progress":
         text += f"\n\n🛠 В роботі: адмін id {r['taken_by']} з {r['taken_at']}"
