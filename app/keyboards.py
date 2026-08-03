@@ -107,14 +107,19 @@ def team_card_kb(team_id: int, status: str | None) -> InlineKeyboardMarkup:
     return _kb(*rows)
 
 
-def team_more_kb(team_id: int) -> InlineKeyboardMarkup:
-    return _kb(
+def team_more_kb(team_id: int, has_open_game: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [_btn("➕ Додати вручну", TeamCb(act="add", team_id=team_id))],
         [_btn("➖ Видалити учасника", TeamCb(act="del", team_id=team_id))],
+    ]
+    if has_open_game:
+        rows.append([_btn("⏸ Пропустити цю гру", TeamCb(act="skip", team_id=team_id))])
+    rows += [
         [_btn("🚫 Заблокувати в команді", TeamCb(act="block", team_id=team_id))],
         [_btn("⚠️ Поскаржитись адміну", TeamCb(act="report", team_id=team_id))],
         [_btn("⬅️ Назад", TeamCb(act="card", team_id=team_id))],
-    )
+    ]
+    return _kb(*rows)
 
 
 def member_card_kb(team_id: int, in_game: bool, drawn: bool) -> InlineKeyboardMarkup:

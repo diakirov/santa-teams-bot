@@ -249,7 +249,11 @@ async def team_more(cb: CallbackQuery, callback_data: kb.TeamCb) -> None:
     team = await _owned_team_or_none(cb, callback_data.team_id)
     if not team:
         return
-    await cb.message.edit_reply_markup(reply_markup=kb.team_more_kb(team["id"]))
+    game = await repo.active_game(team["id"])
+    has_open_game = bool(game and game["status"] == "registration")
+    await cb.message.edit_reply_markup(
+        reply_markup=kb.team_more_kb(team["id"], has_open_game)
+    )
     await cb.answer()
 
 
@@ -305,17 +309,42 @@ async def member_add(message: Message, state: FSMContext, bot: Bot) -> None:
 
 # --- видалити / заблокувати
 
-@router.callback_query(kb.TeamCb.filter(F.act.in_({"del", "block"})))
+@router.callback_query(kb.TeamCb.filter(F.act.in_({"del", "block", "skip"})))
 async def member_pick(cb: CallbackQuery, callback_data: kb.TeamCb) -> None:
     team = await _owned_team_or_none(cb, callback_data.team_id)
     if not team:
         return
-    members = await repo.team_members_list(team["id"])
     game = await repo.active_game(team["id"])
     names = {}
+    players = []
     if game:
-        for p in await repo.game_players_list(game["id"]):
+        players = await repo.game_players_list(game["id"])
+        for p in players:
             names[p["user_id"]] = p["full_name"]
+
+    if callback_data.act == "skip":
+        # прибрати лише з поточної гри — вибираємо серед гравців, а не всіх членів
+        if not game or game["status"] != "registration":
+            await cb.answer(
+                "Зараз немає гри з відкритою реєстрацією.", show_alert=True
+            )
+            return
+        candidates = [
+            {"user_id": p["user_id"], "username": p["username"], "full_name": p["full_name"]}
+            for p in players
+            if p["user_id"] != team["owner_id"]
+        ]
+        if not candidates:
+            await cb.answer("У поточній грі, крім тебе, нікого немає 🙂", show_alert=True)
+            return
+        await cb.message.edit_text(
+            "Хто пропускає цю гру? (людина лишиться в команді)",
+            reply_markup=kb.pick_member_kb(team["id"], "skipgo", candidates),
+        )
+        await cb.answer()
+        return
+
+    members = await repo.team_members_list(team["id"])
     candidates = [
         {
             "user_id": m["user_id"],
@@ -334,7 +363,7 @@ async def member_pick(cb: CallbackQuery, callback_data: kb.TeamCb) -> None:
     await cb.answer()
 
 
-@router.callback_query(kb.MemberCb.filter(F.act.in_({"delgo", "blockgo"})))
+@router.callback_query(kb.MemberCb.filter(F.act.in_({"delgo", "blockgo", "skipgo"})))
 async def member_action(cb: CallbackQuery, callback_data: kb.MemberCb, bot: Bot) -> None:
     team = await _owned_team_or_none(cb, callback_data.team_id)
     if not team:
@@ -346,7 +375,17 @@ async def member_action(cb: CallbackQuery, callback_data: kb.MemberCb, bot: Bot)
             "Спершу скинь гру.", show_alert=True,
         )
         return
-    if callback_data.act == "delgo":
+    if callback_data.act == "skipgo":
+        if not game:
+            await cb.answer("Зараз немає гри з відкритою реєстрацією.", show_alert=True)
+            return
+        await repo.remove_player(game["id"], callback_data.user_id)
+        note = texts.MEMBER_SKIPPED
+        dm = (
+            f"Організатор прибрав тебе з поточної гри в команді «{team['name']}». "
+            "Ти лишаєшся в команді й зможеш грати наступного разу."
+        )
+    elif callback_data.act == "delgo":
         await repo.remove_member(team["id"], callback_data.user_id)
         note = texts.MEMBER_REMOVED
         dm = f"Організатор видалив тебе з команди «{team['name']}»."
