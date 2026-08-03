@@ -71,6 +71,16 @@ async def form_abort(cb: CallbackQuery, state: FSMContext) -> None:
 
 # ------------------------------------------------------------------ вхідні точки
 
+def _form_fields(form) -> dict:
+    return {
+        "full_name": form["full_name"],
+        "phone": form["phone"],
+        "address": form["address"],
+        "allergies": form["allergies"],
+        "wishes": form["wishes"],
+    }
+
+
 async def _start_fill(message: Message, state: FSMContext, game_id: int) -> None:
     """Починає заповнення: спершу пропонує минулу анкету, якщо є."""
     latest = await repo.latest_form(message.chat.id)
@@ -147,10 +157,19 @@ async def fill_or_edit(cb: CallbackQuery, callback_data: kb.FormCb, state: FSMCo
         await cb.answer("Ти не в цій грі 🤔", show_alert=True)
         return
     if callback_data.act == "edit":
-        # свідоме редагування — минулу анкету не пропонуємо, одразу майстер
-        await state.set_state(FormFill.full_name)
-        await state.update_data(game_id=game["id"])
-        await cb.message.answer(texts.FORM_START)
+        form = await repo.get_form(game["id"], cb.from_user.id)
+        if form is not None:
+            # редагування — це підсумок із кнопками полів, а не майстер наново
+            await state.set_state(FormFill.confirm)
+            await state.update_data(game_id=game["id"], **_form_fields(form))
+            await cb.message.answer(
+                texts.form_summary(await state.get_data()),
+                reply_markup=kb.form_confirm_kb(),
+            )
+        else:
+            await state.set_state(FormFill.full_name)
+            await state.update_data(game_id=game["id"])
+            await cb.message.answer(texts.FORM_START)
     else:
         await _start_fill(cb.message, state, game["id"])
     await cb.answer()
@@ -179,6 +198,59 @@ async def form_reuse_decline(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
 
 
+@router.callback_query(FormFill.confirm, kb.FormCb.filter(F.act == "tweak"))
+async def form_reuse_tweak(cb: CallbackQuery, state: FSMContext) -> None:
+    """Минула анкета майже ок — переносимо її в чернетку і даємо правити поля."""
+    latest = await repo.latest_form(cb.from_user.id)
+    if latest is None:
+        await state.clear()
+        await cb.answer(texts.ERROR, show_alert=True)
+        return
+    await state.update_data(reuse_offer=False, **_form_fields(latest))
+    await cb.message.edit_text(
+        texts.form_summary(await state.get_data()), reply_markup=kb.form_confirm_kb()
+    )
+    await cb.answer()
+
+
+# ------------------------------------------------------------------ виправлення одного поля
+
+_FIX_TARGETS = {
+    "fix_full_name": (FormFill.full_name, "full_name"),
+    "fix_phone": (FormFill.phone, "phone"),
+    "fix_address": (FormFill.address, "address"),
+    "fix_allergies": (FormFill.allergies, "allergies"),
+    "fix_wishes": (FormFill.wishes, "wishes"),
+}
+
+
+@router.callback_query(FormFill.confirm, kb.FormCb.filter(F.act.in_(set(_FIX_TARGETS))))
+async def form_fix_field(cb: CallbackQuery, callback_data: kb.FormCb, state: FSMContext) -> None:
+    data = await state.get_data()
+    if "full_name" not in data:  # кнопки полів існують лише на підсумку, але про всяк
+        await cb.answer()
+        return
+    target_state, field = _FIX_TARGETS[callback_data.act]
+    await state.update_data(fix=True)
+    await state.set_state(target_state)
+    await cb.message.answer(texts.FORM_FIX_PROMPTS[field])
+    await cb.answer()
+
+
+async def _advance(message: Message, state: FSMContext, next_state, question: str) -> None:
+    """Наступний крок майстра — або назад до підсумку, якщо виправляли одне поле."""
+    data = await state.get_data()
+    if data.get("fix"):
+        await state.update_data(fix=False)
+        await state.set_state(FormFill.confirm)
+        await message.answer(
+            texts.form_summary(await state.get_data()), reply_markup=kb.form_confirm_kb()
+        )
+    else:
+        await state.set_state(next_state)
+        await message.answer(question)
+
+
 # ------------------------------------------------------------------ кроки
 
 def _clean_text(message: Message, limit: int) -> tuple[str | None, str | None]:
@@ -200,8 +272,7 @@ async def step_full_name(message: Message, state: FSMContext) -> None:
         await message.answer(error)
         return
     await state.update_data(full_name=value)
-    await state.set_state(FormFill.phone)
-    await message.answer(texts.FORM_ASK_PHONE)
+    await _advance(message, state, FormFill.phone, texts.FORM_ASK_PHONE)
 
 
 @router.message(FormFill.phone, F.text)
@@ -211,8 +282,7 @@ async def step_phone(message: Message, state: FSMContext) -> None:
         await message.answer(texts.FORM_BAD_PHONE)
         return
     await state.update_data(phone=phone)
-    await state.set_state(FormFill.address)
-    await message.answer(texts.FORM_ASK_ADDRESS)
+    await _advance(message, state, FormFill.address, texts.FORM_ASK_ADDRESS)
 
 
 @router.message(FormFill.address, F.text)
@@ -222,8 +292,7 @@ async def step_address(message: Message, state: FSMContext) -> None:
         await message.answer(error)
         return
     await state.update_data(address=value)
-    await state.set_state(FormFill.allergies)
-    await message.answer(texts.FORM_ASK_ALLERGIES)
+    await _advance(message, state, FormFill.allergies, texts.FORM_ASK_ALLERGIES)
 
 
 @router.message(FormFill.allergies, F.text)
@@ -233,8 +302,7 @@ async def step_allergies(message: Message, state: FSMContext) -> None:
         await message.answer(error)
         return
     await state.update_data(allergies=value)
-    await state.set_state(FormFill.wishes)
-    await message.answer(texts.FORM_ASK_WISHES)
+    await _advance(message, state, FormFill.wishes, texts.FORM_ASK_WISHES)
 
 
 @router.message(FormFill.wishes, F.text)
@@ -243,7 +311,7 @@ async def step_wishes(message: Message, state: FSMContext) -> None:
     if error:
         await message.answer(error)
         return
-    await state.update_data(wishes=value)
+    await state.update_data(wishes=value, fix=False)  # останній крок завжди веде на підсумок
     await state.set_state(FormFill.confirm)
     data = await state.get_data()
     await message.answer(texts.form_summary(data), reply_markup=kb.form_confirm_kb())

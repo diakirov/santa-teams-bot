@@ -176,13 +176,23 @@ def temp_confirm_kb() -> InlineKeyboardMarkup:
 def form_confirm_kb() -> InlineKeyboardMarkup:
     return _kb(
         [_btn("✅ Все вірно", FormCb(act="save"))],
-        [_btn("✏️ Почати спочатку", FormCb(act="restart"))],
+        [
+            _btn("✏️ ПІБ", FormCb(act="fix_full_name")),
+            _btn("✏️ Телефон", FormCb(act="fix_phone")),
+        ],
+        [
+            _btn("✏️ Адреса", FormCb(act="fix_address")),
+            _btn("✏️ Алергії", FormCb(act="fix_allergies")),
+        ],
+        [_btn("✏️ Побажання", FormCb(act="fix_wishes"))],
+        [_btn("🔄 Почати спочатку", FormCb(act="restart"))],
     )
 
 
 def form_reuse_kb() -> InlineKeyboardMarkup:
     return _kb(
         [_btn("✅ Так, актуально", FormCb(act="reuse"))],
+        [_btn("🔧 Майже — виправлю пару полів", FormCb(act="tweak"))],
         [_btn("✏️ Заповнити заново", FormCb(act="refill"))],
     )
 
