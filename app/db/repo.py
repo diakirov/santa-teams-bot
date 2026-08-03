@@ -566,18 +566,40 @@ async def create_report(
     return cur.lastrowid
 
 
-async def open_reports(kind: str | None = None) -> list[Row]:
-    """kind: None — всі, 'user' — скарги на людей, 'feedback' — bug + idea."""
-    where = "r.status='open'"
+async def reports_list(bucket: str, kind: str | None = None, limit: int = 10) -> list[Row]:
+    """bucket: 'open' — нові, 'work' — в роботі, 'done' — закриті (архів).
+
+    kind: None — всі, 'user' — скарги на людей, 'feedback' — bug + idea.
+    """
+    where = {
+        "open": "r.status='open'",
+        "work": "r.status='in_progress'",
+        "done": "r.status IN ('banned','dismissed','closed')",
+    }[bucket]
     if kind == "user":
         where += " AND r.type='user'"
     elif kind == "feedback":
         where += " AND r.type IN ('bug','idea')"
+    # архів — свіжі згори; черга — старіші першими, щоб ніхто не висів вічно
+    order = "r.resolved_at DESC" if bucket == "done" else "r.created_at"
     cur = await db().execute(
         "SELECT r.*, u.username AS reported_username FROM reports r "
-        f"JOIN users u ON u.id=r.reported_user_id WHERE {where} ORDER BY r.created_at"
+        f"JOIN users u ON u.id=r.reported_user_id WHERE {where} "
+        f"ORDER BY {order} LIMIT ?",
+        (limit,),
     )
     return list(await cur.fetchall())
+
+
+async def take_report(report_id: int, admin_id: int) -> bool:
+    """Атомарно взяти в роботу. False — вже взято чи закрито."""
+    cur = await db().execute(
+        "UPDATE reports SET status='in_progress', taken_by=?, taken_at=? "
+        "WHERE id=? AND status='open'",
+        (admin_id, now(), report_id),
+    )
+    await db().commit()
+    return cur.rowcount == 1
 
 
 async def get_report(report_id: int) -> Row | None:
@@ -588,7 +610,8 @@ async def get_report(report_id: int) -> Row | None:
 async def resolve_report(report_id: int, status: str) -> bool:
     """Атомарно: True лише для того адміна, який закрив скаргу першим."""
     cur = await db().execute(
-        "UPDATE reports SET status=?, resolved_at=? WHERE id=? AND status='open'",
+        "UPDATE reports SET status=?, resolved_at=? "
+        "WHERE id=? AND status IN ('open','in_progress')",
         (status, now(), report_id),
     )
     await db().commit()
@@ -662,7 +685,7 @@ async def stats() -> dict[str, int]:
         "active_games": "SELECT COUNT(*) AS n FROM games WHERE status IN ('registration','drawn')",
         "finished_games": "SELECT COUNT(*) AS n FROM games WHERE status='finished'",
         "forms": "SELECT COUNT(*) AS n FROM forms",
-        "open_reports": "SELECT COUNT(*) AS n FROM reports WHERE status='open'",
+        "open_reports": "SELECT COUNT(*) AS n FROM reports WHERE status IN ('open','in_progress')",
         "pending_roles": "SELECT COUNT(*) AS n FROM role_requests WHERE status='pending'",
         "undelivered": "SELECT COUNT(*) AS n FROM pairs p JOIN games g ON g.id=p.game_id "
                        "WHERE p.delivered_at IS NULL AND g.status='drawn'",

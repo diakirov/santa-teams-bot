@@ -103,7 +103,7 @@ async def feedback_create(message: Message, state: FSMContext, bot: Bot) -> None
         f"{label} #{report_id}\n"
         f"Від: @{message.from_user.username or message.from_user.id} "
         f"(id {message.from_user.id})\n\n{text}",
-        reply_markup=kb.feedback_done_kb(report_id),
+        reply_markup=kb.report_actions_kb(report_id, kind, "open"),
     )
 
 

@@ -109,7 +109,9 @@ CREATE TABLE IF NOT EXISTS reports (
                      CHECK (type IN ('user', 'bug', 'idea')),
     reason           TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'open'
-                     CHECK (status IN ('open', 'banned', 'dismissed')),
+                     CHECK (status IN ('open', 'in_progress', 'banned', 'dismissed', 'closed')),
+    taken_by         INTEGER,                                -- який адмін узяв у роботу
+    taken_at         TEXT,
     created_at       TEXT NOT NULL,
     resolved_at      TEXT
 );

@@ -36,3 +36,8 @@ class BanReason(StatesGroup):
 
 class FeedbackText(StatesGroup):
     text = State()
+
+
+class AdminReply(StatesGroup):
+    """Відповідь адміна автору фідбеку."""
+    text = State()

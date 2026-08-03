@@ -507,7 +507,7 @@ async def report_create(message: Message, state: FSMContext, bot: Bot) -> None:
         f"На: {username} (id {data['reported_id']})\n"
         f"Від: @{message.from_user.username or message.from_user.id}\n"
         f"Причина: {reason}",
-        reply_markup=kb.report_kb(report_id),
+        reply_markup=kb.report_actions_kb(report_id, "user", "open"),
     )
 
 

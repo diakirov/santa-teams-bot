@@ -50,6 +50,23 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
             "ALTER TABLE reports ADD COLUMN type TEXT NOT NULL DEFAULT 'user'"
         )
         log.info("Міграція: додано reports.type")
+    # нові статуси в CHECK: SQLite не вміє ALTER CHECK — перебудовуємо таблицю
+    cur = await conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reports'"
+    )
+    row = await cur.fetchone()
+    if row and "in_progress" not in row["sql"]:
+        log.info("Міграція: перебудова reports під статуси in_progress/closed")
+        await conn.execute("ALTER TABLE reports RENAME TO reports_old")
+        await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        shared = "id, reporter_id, reported_user_id, team_id, type, reason, status, created_at, resolved_at"
+        await conn.execute(
+            f"INSERT INTO reports ({shared}) SELECT {shared} FROM reports_old"
+        )
+        await conn.execute("DROP TABLE reports_old")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_reports_status ON reports(status)"
+        )
 
 
 def db() -> aiosqlite.Connection:

@@ -15,7 +15,7 @@ from app.config import ADMIN_ID, DB_PATH
 from app.db import repo
 from app import runtime
 from app.services import resources, validators
-from app.states import BanReason
+from app.states import AdminReply, BanReason
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -105,45 +105,140 @@ async def admin_stats(cb: CallbackQuery) -> None:
         f"Активних ігор: {s['active_games']}, завершених: {s['finished_games']}\n"
         f"Анкет: {s['forms']}\n"
         f"Недоставлених пар: {s['undelivered']}\n"
-        f"Відкритих скарг: {s['open_reports']}, заявок на ролі: {s['pending_roles']}"
+        f"Скарг і фідбеку в черзі: {s['open_reports']}, заявок на ролі: {s['pending_roles']}"
     )
     await cb.answer()
 
 
-async def _list_reports(cb: CallbackQuery, kind: str | None) -> None:
-    reports = await repo.open_reports(kind)
+_STATUS_LABELS = {
+    "banned": "забанено 🚫",
+    "dismissed": "відхилено ✖️",
+    "closed": "закрито ✔️",
+    "in_progress": "в роботі 🛠",
+}
+
+
+def _report_text(r) -> str:
+    if r["type"] == "user":
+        username = f"@{r['reported_username']}" if r["reported_username"] else ""
+        text = (
+            f"Скарга #{r['id']} від {r['created_at']}\n"
+            f"На: {username} (id {r['reported_user_id']})\n"
+            f"Причина: {r['reason']}"
+        )
+    else:
+        label = "🐞 Баг-репорт" if r["type"] == "bug" else "💡 Пропозиція"
+        text = (
+            f"{label} #{r['id']} від {r['created_at']}\n"
+            f"Від: id {r['reporter_id']}\n\n{r['reason']}"
+        )
+    if r["status"] == "in_progress":
+        text += f"\n\n🛠 В роботі: адмін id {r['taken_by']} з {r['taken_at']}"
+    elif r["status"] != "open":
+        text += f"\n\nСтатус: {_STATUS_LABELS.get(r['status'], r['status'])} ({r['resolved_at']})"
+    return text
+
+
+async def _list_reports(cb: CallbackQuery, bucket: str, kind_key: str) -> None:
+    kind = {"all": None, "user": "user", "fb": "feedback"}[kind_key]
+    reports = await repo.reports_list(bucket, kind)
     if not reports:
         await cb.answer("Тут порожньо 👌", show_alert=True)
         return
-    for r in reports[:10]:
-        if r["type"] == "user":
-            username = f"@{r['reported_username']}" if r["reported_username"] else ""
-            await cb.message.answer(
-                f"Скарга #{r['id']} від {r['created_at']}\n"
-                f"На: {username} (id {r['reported_user_id']})\n"
-                f"Причина: {r['reason']}",
-                reply_markup=kb.report_kb(r["id"]),
-            )
-        else:
-            label = "🐞 Баг-репорт" if r["type"] == "bug" else "💡 Пропозиція"
-            await cb.message.answer(
-                f"{label} #{r['id']} від {r['created_at']}\n"
-                f"Від: id {r['reporter_id']}\n\n{r['reason']}",
-                reply_markup=kb.feedback_done_kb(r["id"]),
-            )
-    if len(reports) > 10:
-        await cb.message.answer(f"…і ще {len(reports) - 10} у черзі.")
-    await cb.message.answer("Показати:", reply_markup=kb.reports_filter_kb())
+    for r in reports:
+        markup = kb.report_actions_kb(r["id"], r["type"], r["status"])
+        await cb.message.answer(_report_text(r), reply_markup=markup)
+    await cb.message.answer("Показати:", reply_markup=kb.reports_filter_kb(bucket, kind_key))
     await cb.answer()
 
 
-@router.callback_query(kb.AdminCb.filter(F.act.in_({"reports", "rep_f_user", "rep_f_fb"})))
-async def admin_reports(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+@router.callback_query(kb.AdminCb.filter(F.act == "reports"))
+async def admin_reports(cb: CallbackQuery) -> None:
     if not await _is_admin_cb(cb):
         await cb.answer("Ця дія недоступна", show_alert=True)
         return
-    kind = {"reports": None, "rep_f_user": "user", "rep_f_fb": "feedback"}[callback_data.act]
-    await _list_reports(cb, kind)
+    await _list_reports(cb, "open", "all")
+
+
+@router.callback_query(kb.RepListCb.filter())
+async def admin_reports_filtered(cb: CallbackQuery, callback_data: kb.RepListCb) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    await _list_reports(cb, callback_data.bucket, callback_data.kind)
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "rep_take"))
+async def admin_report_take(cb: CallbackQuery, callback_data: kb.AdminCb, bot: Bot) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    report = await repo.get_report(callback_data.arg)
+    if report is None:
+        await cb.answer("Не знайдено", show_alert=True)
+        return
+    if not await repo.take_report(report["id"], cb.from_user.id):
+        await cb.answer("Уже в роботі або закрито", show_alert=True)
+        return
+    report = await repo.get_report(report["id"])
+    await cb.message.edit_text(
+        _report_text(report),
+        reply_markup=kb.report_actions_kb(report["id"], report["type"], "in_progress"),
+    )
+    what = "Скаргу" if report["type"] == "user" else "Фідбек"
+    await notify_admins(
+        bot,
+        f"ℹ️ {what} #{report['id']} взяв у роботу @{cb.from_user.username or cb.from_user.id}",
+        exclude_id=cb.from_user.id,
+    )
+    await cb.answer("Взято в роботу 🛠")
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "rep_reply"))
+async def admin_report_reply_ask(
+    cb: CallbackQuery, callback_data: kb.AdminCb, state: FSMContext
+) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    report = await repo.get_report(callback_data.arg)
+    if report is None or report["status"] not in ("open", "in_progress"):
+        await cb.answer("Це вже закрито", show_alert=True)
+        return
+    await state.set_state(AdminReply.text)
+    await state.update_data(report_id=report["id"])
+    await cb.message.answer(
+        f"Напиши відповідь автору #{report['id']} — надішлю від імені бота.\n"
+        "/cancel — передумав."
+    )
+    await cb.answer()
+
+
+@router.message(AdminReply.text, F.text)
+async def admin_report_reply_send(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = (message.text or "").strip()
+    if text.startswith("/") or text in kb.MENU_BUTTONS:
+        await state.clear()
+        raise SkipHandler
+    data = await state.get_data()
+    await state.clear()
+    report = await repo.get_report(data.get("report_id", 0))
+    if report is None:
+        await message.answer("Не знайшов цей фідбек 🤔")
+        return
+    # відповідь без явного «взяти в роботу» — беремо автоматично, якщо ще нічия
+    await repo.take_report(report["id"], message.from_user.id)
+    label = "баг-репорт" if report["type"] == "bug" else "пропозицію"
+    try:
+        await bot.send_message(
+            report["reporter_id"],
+            f"✉️ Відповідь адміна на твій {label} #{report['id']}:\n\n{text}",
+        )
+    except Exception:
+        await message.answer("Не зміг доставити — людина, схоже, заблокувала бота 😕")
+        return
+    log.info("Відповідь на фідбек #%s від адміна %s", report["id"], message.from_user.id)
+    await message.answer("Надіслано ✅ Не забудь закрити, коли питання вичерпане.")
 
 
 @router.callback_query(kb.AdminCb.filter(F.act.in_({"rep_ban", "rep_dismiss"})))
@@ -163,8 +258,9 @@ async def admin_report_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot:
         await cb.answer("Адміністратора може банити лише головний адмін", show_alert=True)
         return
     # атомарний «клейм»: якщо інший адмін встиг першим — просто повідомляємо
-    if not await repo.resolve_report(report["id"], "banned" if ban else "dismissed"):
-        await cb.answer("Цю скаргу вже розглянув інший адмін", show_alert=True)
+    terminal = "banned" if ban else ("dismissed" if report["type"] == "user" else "closed")
+    if not await repo.resolve_report(report["id"], terminal):
+        await cb.answer("Це вже розглянув інший адмін", show_alert=True)
         return
     if ban:
         await repo.set_ban(

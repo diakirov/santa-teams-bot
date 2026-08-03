@@ -63,6 +63,12 @@ class FeedbackCb(CallbackData, prefix="fb"):
     kind: str  # bug | idea
 
 
+class RepListCb(CallbackData, prefix="rl"):
+    """Фільтри черги скарг/фідбеку."""
+    bucket: str  # open | work | done
+    kind: str    # all | user | fb
+
+
 def _btn(text: str, cb: CallbackData) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=cb.pack())
 
@@ -248,14 +254,6 @@ def person_card_kb(user, viewer_is_main_admin: bool) -> InlineKeyboardMarkup:
     return _kb(*rows)
 
 
-def report_kb(report_id: int) -> InlineKeyboardMarkup:
-    # довгі підписи — кожен своїм рядком, інакше Telegram обрізає текст
-    return _kb(
-        [_btn("🚫 Забанити глобально", AdminCb(act="rep_ban", arg=report_id))],
-        [_btn("✖️ Відхилити скаргу", AdminCb(act="rep_dismiss", arg=report_id))],
-    )
-
-
 def feedback_type_kb() -> InlineKeyboardMarkup:
     return _kb(
         [_btn("🐞 Щось не працює", FeedbackCb(kind="bug"))],
@@ -263,16 +261,36 @@ def feedback_type_kb() -> InlineKeyboardMarkup:
     )
 
 
-def feedback_done_kb(report_id: int) -> InlineKeyboardMarkup:
-    return _kb([_btn("✔️ Опрацьовано", AdminCb(act="rep_dismiss", arg=report_id))])
+def report_actions_kb(report_id: int, rtype: str, status: str) -> InlineKeyboardMarkup | None:
+    """Дії з карткою скарги/фідбеку залежно від типу і статусу. None — без кнопок."""
+    rows = []
+    if status == "open":
+        rows.append([_btn("🛠 Взяти в роботу", AdminCb(act="rep_take", arg=report_id))])
+    if status in ("open", "in_progress"):
+        if rtype == "user":
+            # довгі підписи — кожен своїм рядком, інакше Telegram обрізає текст
+            rows.append([_btn("🚫 Забанити глобально", AdminCb(act="rep_ban", arg=report_id))])
+            rows.append([_btn("✖️ Відхилити скаргу", AdminCb(act="rep_dismiss", arg=report_id))])
+        else:
+            rows.append([_btn("✉️ Відповісти автору", AdminCb(act="rep_reply", arg=report_id))])
+            rows.append([_btn("✔️ Закрити", AdminCb(act="rep_dismiss", arg=report_id))])
+    return _kb(*rows) if rows else None
 
 
-def reports_filter_kb() -> InlineKeyboardMarkup:
-    return _kb([
-        _btn("👤 Скарги", AdminCb(act="rep_f_user")),
-        _btn("🐞💡 Фідбек", AdminCb(act="rep_f_fb")),
-        _btn("Усі", AdminCb(act="reports")),
-    ])
+def reports_filter_kb(bucket: str, kind: str) -> InlineKeyboardMarkup:
+    def mark(label: str, active: bool) -> str:
+        return f"· {label} ·" if active else label
+
+    def b(label: str, value: str) -> InlineKeyboardButton:
+        return _btn(mark(label, value == bucket), RepListCb(bucket=value, kind=kind))
+
+    def k(label: str, value: str) -> InlineKeyboardButton:
+        return _btn(mark(label, value == kind), RepListCb(bucket=bucket, kind=value))
+
+    return _kb(
+        [b("📥 Нові", "open"), b("🛠 В роботі", "work"), b("🗄 Закриті", "done")],
+        [k("Усі", "all"), k("👤 Скарги", "user"), k("🐞💡 Фідбек", "fb")],
+    )
 
 
 def role_request_kb(request_id: int) -> InlineKeyboardMarkup:
