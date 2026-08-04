@@ -500,13 +500,15 @@ async def report_create(message: Message, state: FSMContext, bot: Bot) -> None:
     )
     await message.answer(texts.REPORT_SENT)
     reported = await repo.get_user(data["reported_id"])
-    username = f"@{reported['username']}" if reported and reported["username"] else str(data["reported_id"])
+    reported_ref = texts.person_ref(
+        data["reported_id"], reported["username"] if reported else None
+    )
     from app.routers.admin import notify_admins
     await notify_admins(
         bot,
         f"⚠️ Нова скарга #{report_id}\n"
-        f"На: {username} (id {data['reported_id']})\n"
-        f"Від: @{message.from_user.username or message.from_user.id}\n"
+        f"На: {reported_ref}\n"
+        f"Від: {texts.person_ref(message.from_user.id, message.from_user.username)}\n"
         f"Причина: {reason}",
         reply_markup=kb.report_actions_kb(
             report_id, "user", "open", bool(message.from_user.username)

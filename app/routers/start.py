@@ -104,8 +104,7 @@ async def feedback_create(message: Message, state: FSMContext, bot: Bot) -> None
     await notify_admins(
         bot,
         f"{label} #{report_id}\n"
-        f"Від: @{message.from_user.username or message.from_user.id} "
-        f"(id {message.from_user.id})\n\n{text}",
+        f"Від: {texts.person_ref(message.from_user.id, message.from_user.username)}\n\n{text}",
         reply_markup=kb.report_actions_kb(
             report_id, kind, "open", bool(message.from_user.username)
         ),
@@ -152,7 +151,7 @@ async def author_reply_send(message: Message, state: FSMContext, bot: Bot) -> No
         await message.answer(texts.ERROR)
         return
     author = message.from_user
-    who = f"@{author.username} (id {author.id})" if author.username else f"id {author.id}"
+    who = texts.person_ref(author.id, author.username)
     # цитата питання адміна — щоб було видно, на що це відповідь
     reply_params = (
         ReplyParameters(

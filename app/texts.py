@@ -68,6 +68,12 @@ def help_text(role: str, retention: int, limits: tuple[int, int] | None = None) 
     )
     return text
 
+def person_ref(user_id: int, username: str | None) -> str:
+    """@username — клікабельний; без нього просто id (НЕ «@id»: такий лінк
+    Telegram трактує як неіснуючий юзернейм)."""
+    return f"@{username} (id {user_id})" if username else f"id {user_id}"
+
+
 MENU = "Головне меню 🎄"
 CANCELLED = "Окей, скасував ✅"
 NOTHING_TO_CANCEL = "Зараз немає активної дії, все спокійно 🙂"

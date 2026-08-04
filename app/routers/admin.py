@@ -69,9 +69,8 @@ async def role_request(message: Message, bot: Bot) -> None:
     if request_id:
         await notify_admins(
             bot,
-            f"👑 Заявка на роль керівника від "
-            f"@{message.from_user.username or message.from_user.id} "
-            f"(id {message.from_user.id})",
+            "👑 Заявка на роль керівника від "
+            + texts.person_ref(message.from_user.id, message.from_user.username),
             reply_markup=kb.role_request_kb(request_id),
         )
 
@@ -124,18 +123,13 @@ _STATUS_LABELS = {
 }
 
 
-def _person_ref(user_id: int, username: str | None) -> str:
-    """@username клікабельний — адмін може одразу написати людині в лічку."""
-    return f"@{username} (id {user_id})" if username else f"id {user_id}"
-
-
 def _report_text(r) -> str:
-    reporter = _person_ref(r["reporter_id"], r["reporter_username"])
+    reporter = texts.person_ref(r["reporter_id"], r["reporter_username"])
     if r["type"] == "user":
         text = (
             f"Скарга #{r['id']} від {r['created_at']}\n"
             f"Від кого: {reporter}\n"
-            f"На: {_person_ref(r['reported_user_id'], r['reported_username'])}\n"
+            f"На: {texts.person_ref(r['reported_user_id'], r['reported_username'])}\n"
             f"Причина: {r['reason']}"
         )
     else:
@@ -204,9 +198,20 @@ async def admin_report_take(cb: CallbackQuery, callback_data: kb.AdminCb, bot: B
     what = "Скаргу" if report["type"] == "user" else "Фідбек"
     await notify_admins(
         bot,
-        f"ℹ️ {what} #{report['id']} взяв у роботу @{cb.from_user.username or cb.from_user.id}",
+        f"ℹ️ {what} #{report['id']} взяв у роботу "
+        + texts.person_ref(cb.from_user.id, cb.from_user.username),
         exclude_id=cb.from_user.id,
     )
+    took = {
+        "user": "Твою скаргу", "bug": "Твій баг-репорт", "idea": "Твою пропозицію",
+    }[report["type"]]
+    try:
+        await bot.send_message(
+            report["reporter_id"],
+            f"ℹ️ {took} #{report['id']} взяли в роботу — повернемось із відповіддю 🙌",
+        )
+    except Exception:
+        pass
     await cb.answer("Взято в роботу 🛠")
 
 
@@ -299,6 +304,59 @@ async def admin_report_profile(cb: CallbackQuery, callback_data: kb.AdminCb) -> 
 
 
 @router.callback_query(kb.AdminCb.filter(F.act.in_({"rep_ban", "rep_dismiss"})))
+async def admin_report_confirm_ask(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    """Закриття і бан — незворотні: спершу підтвердження, на місці картки."""
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    report = await repo.get_report(callback_data.arg)
+    if report is None:
+        await cb.answer("Не знайдено", show_alert=True)
+        return
+    if report["status"] not in ("open", "in_progress"):
+        await cb.answer("Це вже закрито", show_alert=True)
+        return
+    if callback_data.act == "rep_ban":
+        if report["type"] != "user":
+            await cb.answer("Це фідбек на бота — тут нема кого банити 🙂", show_alert=True)
+            return
+        question = (
+            f"Забанити {texts.person_ref(report['reported_user_id'], report['reported_username'])} "
+            f"глобально? Причиною запишеться «скарга #{report['id']}»."
+        )
+        yes_act, yes_text = "rep_ban_yes", "🚫 Так, забанити"
+    else:
+        what = "Відхилити скаргу" if report["type"] == "user" else "Закрити звернення"
+        question = f"{what} #{report['id']}? Автор отримає сповіщення."
+        yes_act, yes_text = "rep_close_yes", (
+            "✖️ Так, відхилити" if report["type"] == "user" else "✅ Так, закрити"
+        )
+    await cb.message.edit_text(
+        _report_text(report) + f"\n\n———\n{question}",
+        reply_markup=kb.report_confirm_kb(report["id"], yes_act, yes_text),
+    )
+    await cb.answer()
+
+
+@router.callback_query(kb.AdminCb.filter(F.act == "rep_back"))
+async def admin_report_back(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
+    if not await _is_admin_cb(cb):
+        await cb.answer("Ця дія недоступна", show_alert=True)
+        return
+    report = await repo.get_report(callback_data.arg)
+    if report is None:
+        await cb.answer("Не знайдено", show_alert=True)
+        return
+    await cb.message.edit_text(
+        _report_text(report),
+        reply_markup=kb.report_actions_kb(
+            report["id"], report["type"], report["status"], bool(report["reporter_username"])
+        ),
+    )
+    await cb.answer()
+
+
+@router.callback_query(kb.AdminCb.filter(F.act.in_({"rep_ban_yes", "rep_close_yes"})))
 async def admin_report_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot: Bot) -> None:
     if not await _is_admin_cb(cb):
         await cb.answer("Ця дія недоступна", show_alert=True)
@@ -307,7 +365,7 @@ async def admin_report_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot:
     if report is None:
         await cb.answer("Скаргу не знайдено", show_alert=True)
         return
-    ban = callback_data.act == "rep_ban"
+    ban = callback_data.act == "rep_ban_yes"
     if ban and report["type"] != "user":
         await cb.answer("Це фідбек на бота — тут нема кого банити 🙂", show_alert=True)
         return
@@ -334,7 +392,8 @@ async def admin_report_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot:
     await cb.message.edit_text(f"{what} #{report['id']}: {outcome}")
     await notify_admins(
         bot,
-        f"ℹ️ {what} #{report['id']} розглянув @{cb.from_user.username or cb.from_user.id}: {outcome}",
+        f"ℹ️ {what} #{report['id']} розглянув "
+        + texts.person_ref(cb.from_user.id, cb.from_user.username) + f": {outcome}",
         exclude_id=cb.from_user.id,
     )
     thanks = (
@@ -382,7 +441,7 @@ async def admin_role_decide(cb: CallbackQuery, callback_data: kb.AdminCb, bot: B
     await notify_admins(
         bot,
         f"ℹ️ Заявку #{req['id']} на роль керівника (id {req['user_id']}) розглянув "
-        f"@{cb.from_user.username or cb.from_user.id}: {outcome}",
+        + texts.person_ref(cb.from_user.id, cb.from_user.username) + f": {outcome}",
         exclude_id=cb.from_user.id,
     )
     try:
@@ -427,34 +486,39 @@ async def admin_toggle_registration(cb: CallbackQuery) -> None:
         if is_open
         else "Відкрити створення нових команд для всіх?"
     )
-    await cb.message.answer(
+    # редагуємо панель на місці: в чаті немає другого живого меню,
+    # а в callback кладемо АБСОЛЮТНИЙ цільовий стан — тап по застарілому
+    # повідомленню не «фліпне» реєстрацію ще раз
+    await cb.message.edit_text(
         question,
         reply_markup=kb.confirm_kb(
-            kb.AdminCb(act="reg_yes"), kb.AdminCb(act="reg_no"),
+            kb.AdminCb(act="reg_set", arg=0 if is_open else 1),
+            kb.AdminCb(act="reg_back"),
             yes_text="⏸ Так, закрити" if is_open else "▶️ Так, відкрити",
         ),
     )
     await cb.answer()
 
 
-@router.callback_query(kb.AdminCb.filter(F.act.in_({"reg_yes", "reg_no"})))
+@router.callback_query(kb.AdminCb.filter(F.act.in_({"reg_set", "reg_back"})))
 async def admin_toggle_registration_decide(cb: CallbackQuery, callback_data: kb.AdminCb) -> None:
     if cb.from_user.id != ADMIN_ID:
         await cb.answer("Вимикач реєстрації доступний лише головному адміну", show_alert=True)
         return
-    if callback_data.act == "reg_no":
-        await cb.message.edit_text("Окей, нічого не міняю ✖️")
-        await cb.answer()
-        return
+    if callback_data.act == "reg_set":
+        target_open = bool(callback_data.arg)
+        await repo.set_setting("registration_open", "1" if target_open else "0")
+        log.info("Створення нових команд: %s", "відкрито" if target_open else "закрито")
+        await cb.answer(
+            f"Створення нових команд: {'відкрито ▶️' if target_open else 'закрито ⏸'}"
+        )
+    else:
+        await cb.answer("Нічого не змінилось")
+    # в обох випадках повертаємо на місці актуальну панель
     is_open = await repo.registration_open()
-    await repo.set_setting("registration_open", "0" if is_open else "1")
-    state = "закрито ⏸" if is_open else "відкрито ▶️"
-    log.info("Створення нових команд: %s", state)
     await cb.message.edit_text(
-        f"Створення нових команд: {state}\n\n{_panel_text(not is_open)}",
-        reply_markup=kb.admin_menu_kb(not is_open, True),
+        _panel_text(is_open), reply_markup=kb.admin_menu_kb(is_open, True)
     )
-    await cb.answer()
 
 
 # ------------------------------------------------------------------ люди з ролями

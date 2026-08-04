@@ -294,8 +294,17 @@ def report_actions_kb(
             rows.append([_btn("🚫 Забанити глобально", AdminCb(act="rep_ban", arg=report_id))])
             rows.append([_btn("✖️ Відхилити скаргу", AdminCb(act="rep_dismiss", arg=report_id))])
         else:
-            rows.append([_btn("✔️ Закрити", AdminCb(act="rep_dismiss", arg=report_id))])
+            rows.append([_btn("✅ Закрити звернення", AdminCb(act="rep_dismiss", arg=report_id))])
     return _kb(*rows) if rows else None
+
+
+def report_confirm_kb(report_id: int, yes_act: str, yes_text: str) -> InlineKeyboardMarkup:
+    """Підтвердження закриття/бану: з можливістю спершу відповісти чи повернутись."""
+    return _kb(
+        [_btn(yes_text, AdminCb(act=yes_act, arg=report_id))],
+        [_btn("✉️ Спершу відповісти автору", AdminCb(act="rep_reply", arg=report_id))],
+        [_btn("⬅️ Назад до картки", AdminCb(act="rep_back", arg=report_id))],
+    )
 
 
 def author_reply_kb(report_id: int) -> InlineKeyboardMarkup:

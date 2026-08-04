@@ -110,8 +110,9 @@ class ThrottlingMiddleware(BaseMiddleware):
             try:
                 await bot.send_message(
                     self._main_admin_id,
-                    f"⚠️ Анти-флуд: користувач {user.id} (@{user.username}) "
-                    f"зам'ючений на годину.",
+                    "⚠️ Анти-флуд: користувач "
+                    + texts.person_ref(user.id, user.username)
+                    + " зам'ючений на годину.",
                 )
             except Exception:
                 log.exception("Не вдалося сповістити адміна про м'ют")
